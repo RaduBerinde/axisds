@@ -1,0 +1,45 @@
+# This file tests the region tree using flexible integer boundaries.
+
+add
+[1, 1] 1
+----
+regions:
+  [1, 1] = 1
+
+add
+(1, 2) 2
+----
+regions:
+  [1, 1] = 1
+  (1, 2) = 2
+
+add
+(2, 4] 2
+----
+regions:
+  [1, 1] = 1
+  (1, 2) = 2
+  (2, 4] = 2
+
+add
+[1, 1] 1
+----
+regions:
+  [1, 2) = 2
+  (2, 4] = 2
+
+add
+[2, 10] 5
+----
+regions:
+  [1, 2) = 2
+  [2, 2] = 5
+  (2, 4] = 7
+  (4, 10] = 5
+
+watermark w=3
+----
+regions:
+  [2, 2] = 5
+  (2, 4] = 7
+  (4, 10] = 5
