@@ -28,45 +28,50 @@ type Boundary = axisds.Boundary
 // one-dimensional axis.
 type Property any
 
-// PropertyEqualFn is a function used to compare two properties. If it returns
-// true, the two property values can be used interchangeably.
+// PropertyEqualFn is a function used to compare properties of two regions. If
+// it returns true, the two property values can be used interchangeably.
 //
 // Note that it is allowed for the function to "evolve" over time, with values
 // that were not equal becoming equal (but not the opposite: once two values are
 // equal, they must stay equal forever).
 //
-// A property zero value is any value that is equal to the zero P value.
+// A zero property value is any value that is equal to the zero P value.
 type PropertyEqualFn[P Property] func(a, b P) bool
 
-// T is a tree of regions which fragment the entire one-dimensional space. Each
-// region maintains a property. Neighboring regions with equal properties are
-// automatically merged.
+// T is a tree of regions which fragment a one-dimensional space. Regions have
+// boundaries of type B and each region maintains a property P. Neighboring
+// regions with equal properties are automatically merged.
+//
+// T supports lazy (copy-on-write) cloning via Clone().
 type T[B Boundary, P Property] struct {
 	cmp    axisds.CompareFn[B]
 	propEq PropertyEqualFn[P]
 	tree   *btree.BTreeG[region[B, P]]
 }
 
+// region is a fragment of the one-dimensional space with a property.
+// The region ends at the next region's start boundary.
 type region[B Boundary, P Property] struct {
 	start B
 	prop  P
 }
 
-func New[B Boundary, P Property](cmp axisds.CompareFn[B], propEq PropertyEqualFn[P]) *T[B, P] {
-	t := &T[B, P]{}
-	t.Init(cmp, propEq)
-	return t
-}
-
-func (t *T[B, P]) Init(cmp axisds.CompareFn[B], propEq PropertyEqualFn[P]) {
-	t.cmp = cmp
-	t.propEq = propEq
+// Make creates a new region tree with the given boundary and property
+// comparison functions.
+func Make[B Boundary, P Property](cmp axisds.CompareFn[B], propEq PropertyEqualFn[P]) T[B, P] {
+	t := T[B, P]{
+		cmp:    cmp,
+		propEq: propEq,
+	}
 	lessFn := func(a, b region[B, P]) bool {
 		return cmp(a.start, b.start) < 0
 	}
 	t.tree = btree.NewG[region[B, P]](4, lessFn)
+	return t
 }
 
+// Update the property for the given range. The updateProp function is called
+// for all the regions within the range to calculate the new property.
 func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 	t.ensureBoundary(start)
 	t.ensureBoundary(end)
@@ -83,48 +88,98 @@ func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 	t.optimizeRange(start, end)
 }
 
-// Enumerate all fragments of the region [start, end) with non-zero property.
+// Enumerate all regions in the range [start, end) with non-zero property.
+//
+// Two consecutive regions can "touch" but not overlap; if they touch, their
+// properties are not equal.
+//
+// Enumerate stops once emit() returns false.
 func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) {
 	if t.tree.Len() < 2 || t.cmp(start, end) >= 0 {
 		return
 	}
-	var lastProp P
-	skipFirst := false
+	var eh enumerateHelper[B, P]
+	// Handle the case where we don't have a boundary equal to start; we have to
+	// find the region that contains it.
 	t.tree.DescendLessOrEqual(region[B, P]{start: start}, func(r region[B, P]) bool {
-		if t.cmp(start, r.start) == 0 {
-			skipFirst = true
+		if t.cmp(r.start, start) < 0 {
+			// This is the first addRegion call, so we won't emit anything,.
+			eh.addRegion(start, r.prop, t.propEq, nil)
 		}
-		lastProp = r.prop
 		return false
 	})
-	lastBoundary := start
 	var toDelete []region[B, P]
-	t.tree.AscendGreaterOrEqual(region[B, P]{start: start}, func(r region[B, P]) bool {
-		var zeroProp P
-		if skipFirst {
-			skipFirst = false
-			return true
-		}
-		if t.cmp(end, r.start) <= 0 {
-			if !t.propEq(lastProp, zeroProp) {
-				emit(lastBoundary, end, lastProp)
-			}
-			return false
-		}
-		if t.propEq(lastProp, r.prop) {
-			// This boundary is not useful, skip.
+	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
+		eh.addRegion(r.start, r.prop, t.propEq, emit)
+		if eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, r)
-			return true
 		}
-		if !t.propEq(lastProp, zeroProp) && !emit(lastBoundary, r.start, lastProp) {
-			return false
+		return !eh.stopEmitting
+	})
+	eh.finish(end, t.propEq, emit)
+	for _, b := range toDelete {
+		t.tree.Delete(b)
+	}
+}
+
+// EnumerateAll emits all regions with non-zero property.
+//
+// Two consecutive regions can "touch" but not overlap; if they touch, their
+// properties are not equal.
+//
+// EnumerateAll stops once emit() returns false.
+func (t *T[B, P]) EnumerateAll(emit func(start, end B, prop P) bool) {
+	var eh enumerateHelper[B, P]
+	var toDelete []region[B, P]
+	t.tree.Ascend(func(r region[B, P]) bool {
+		eh.addRegion(r.start, r.prop, t.propEq, emit)
+		if eh.canDeleteLastBoundary {
+			toDelete = append(toDelete, r)
 		}
-		lastBoundary = r.start
-		lastProp = r.prop
-		return true
+		return !eh.stopEmitting
 	})
 	for _, b := range toDelete {
 		t.tree.Delete(b)
+	}
+}
+
+type enumerateHelper[B Boundary, P Property] struct {
+	lastBoundary B
+	lastProp     P
+	initialized  bool
+	stopEmitting bool
+	// canDeleteLastBoundary is set by addRegion when the two last regions had
+	// equal properties.
+	canDeleteLastBoundary bool
+}
+
+func (eh *enumerateHelper[B, P]) addRegion(
+	boundary B, prop P, propEq PropertyEqualFn[P], emitFn func(start, end B, prop P) bool,
+) {
+	if !eh.initialized {
+		eh.lastBoundary = boundary
+		eh.lastProp = prop
+		eh.initialized = true
+		return
+	}
+	eh.canDeleteLastBoundary = propEq(eh.lastProp, prop)
+	if eh.canDeleteLastBoundary || eh.stopEmitting {
+		return
+	}
+	var zeroProp P
+	if !propEq(zeroProp, eh.lastProp) && !emitFn(eh.lastBoundary, boundary, eh.lastProp) {
+		eh.stopEmitting = true
+	}
+	eh.lastBoundary = boundary
+	eh.lastProp = prop
+}
+
+func (eh *enumerateHelper[B, P]) finish(
+	end B, propEq PropertyEqualFn[P], emitFn func(start, end B, prop P) bool,
+) {
+	var zeroProp P
+	if eh.initialized && !eh.stopEmitting && !propEq(zeroProp, eh.lastProp) {
+		emitFn(eh.lastBoundary, end, eh.lastProp)
 	}
 }
 
@@ -149,41 +204,63 @@ func (t *T[B, P]) IsEmpty() bool {
 	return t.tree.Len() < 2
 }
 
-// CheckInvariants can be used in testing builds to verify internal invariants.
-func (t *T[B, P]) CheckInvariants() {
-	t.tree.Descend(func(r region[B, P]) bool {
-		var zeroProp P
-		if !t.propEq(r.prop, zeroProp) {
-			panic("last region must always have zero property")
-		}
-		return false
-	})
+// Clone creates a lazy clone of T with the same properties and regions. The new
+// tree can be modified independently.
+//
+// This operation is constant time; it can cause some minor slowdown of future
+// updates because of copy-on-write logic.
+func (t *T[B, P]) Clone() T[B, P] {
+	return T[B, P]{
+		cmp:    t.cmp,
+		propEq: t.propEq,
+		tree:   t.tree.Clone(),
+	}
 }
 
+// String formats all regions, one per line.
 func (t *T[B, P]) String(bFmt axisds.Formatter[B]) string {
 	var b strings.Builder
-	var lastBoundary B
-	var lastProp, zeroProp P
-	first := true
+	// We don't use EnumerateAll because we don't want String() to modify the
+	// structure (it is typically used for testing or debugging).
+	var eh enumerateHelper[B, P]
 	t.tree.Ascend(func(r region[B, P]) bool {
-		if first {
-			first = false
-			lastBoundary = r.start
-			lastProp = r.prop
+		eh.addRegion(r.start, r.prop, t.propEq, func(start, end B, prop P) bool {
+			fmt.Fprintf(&b, "%s = %v\n", bFmt.FormatInterval(start, end), prop)
 			return true
-		}
-		if t.propEq(lastProp, r.prop) {
-			return true
-		}
-		if !t.propEq(lastProp, zeroProp) {
-			fmt.Fprintf(&b, "%s = %v\n", bFmt.FormatInterval(lastBoundary, r.start), lastProp)
-		}
-		lastBoundary = r.start
-		lastProp = r.prop
+		})
 		return true
 	})
 	if b.Len() == 0 {
 		return "<empty>"
 	}
 	return b.String()
+}
+
+// CheckInvariants can be used in testing builds to verify internal invariants.
+func (t *T[B, P]) CheckInvariants() {
+	var lastBoundary B
+	var lastProp P
+	lastBoundarySet := false
+	t.tree.Ascend(func(r region[B, P]) bool {
+		if lastBoundarySet {
+			if t.cmp(lastBoundary, r.start) >= 0 {
+				panic("region boundaries not increasing")
+			}
+		}
+		if !t.propEq(r.prop, r.prop) {
+			panic("region property is not equal to itself")
+		}
+		lastBoundary = r.start
+		lastBoundarySet = true
+		lastProp = r.prop
+		return true
+	})
+
+	// Last region should have the zero property.
+	if lastBoundarySet {
+		var zeroProp P
+		if !t.propEq(lastProp, zeroProp) {
+			panic("last region must always have zero property")
+		}
+	}
 }

@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"fmt"
 	"math/rand/v2"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -48,7 +49,7 @@ func testDataDriven[B Boundary](
 	// lowWatermark is a value that we can increase which makes any value <
 	// lowWatermark be equivalent to 0.
 	lowWatermark := -100000
-	rt := New[B, int](cmpFn, func(a, b int) bool {
+	rt := Make[B, int](cmpFn, func(a, b int) bool {
 		if a < lowWatermark && b < lowWatermark {
 			return true
 		}
@@ -98,7 +99,7 @@ func TestRegionTreeRand(t *testing.T) {
 		seed := rand.Uint64()
 		rng := rand.New(rand.NewPCG(seed, seed))
 
-		rt := New[int, int](cmp.Compare[int], func(a, b int) bool { return a == b })
+		rt := Make[int, int](cmp.Compare[int], func(a, b int) bool { return a == b })
 		n := naiveInts{}
 
 		valRange := rng.IntN(maxRange) + 1
@@ -189,4 +190,34 @@ func (n *naiveInts) IsEmpty() bool {
 		}
 	}
 	return true
+}
+
+func TestClone(t *testing.T) {
+	expect := func(rt *T[int, int], vals ...int) {
+		var r [][3]int
+		rt.Enumerate(0, 1000, func(start, end, prop int) bool {
+			r = append(r, [3]int{start, end, prop})
+			return true
+		})
+		var exp [][3]int
+		for i := 0; i < len(vals); i += 3 {
+			exp = append(exp, [3]int{vals[i], vals[i+1], vals[i+2]})
+		}
+		if !reflect.DeepEqual(r, exp) {
+			t.Helper()
+			t.Fatalf("expected:\n%v\ngot:\n%v", exp, r)
+		}
+	}
+	t1 := Make[int, int](cmp.Compare[int], func(a, b int) bool { return a == b })
+	t1.Update(5, 10, func(v int) int { return 100 })
+	t1.Update(9, 22, func(v int) int { return 200 })
+	expect(&t1, 5, 9, 100, 9, 22, 200)
+	t2 := t1.Clone()
+	expect(&t2, 5, 9, 100, 9, 22, 200)
+	t2.Update(6, 10, func(v int) int { return 0 })
+	expect(&t1, 5, 9, 100, 9, 22, 200)
+	expect(&t2, 5, 6, 100, 10, 22, 200)
+	t1.Update(3, 8, func(v int) int { return 300 })
+	expect(&t1, 3, 8, 300, 8, 9, 100, 9, 22, 200)
+	expect(&t2, 5, 6, 100, 10, 22, 200)
 }
