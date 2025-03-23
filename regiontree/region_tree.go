@@ -72,6 +72,10 @@ func Make[B Boundary, P Property](cmp axisds.CompareFn[B], propEq PropertyEqualF
 
 // Update the property for the given range. The updateProp function is called
 // for all the regions within the range to calculate the new property.
+//
+// The runtime complexity is O(log N + K) where K is the number of regions we
+// are updating. Note that if the ranges we update are mostly non-overlapping,
+// this will be O(log N) on average.
 func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 	t.ensureBoundary(start)
 	t.ensureBoundary(end)
