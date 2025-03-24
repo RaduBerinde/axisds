@@ -51,6 +51,15 @@ type InclusiveOrExclusive int8
 const Inclusive InclusiveOrExclusive = 1
 const Exclusive InclusiveOrExclusive = 2
 
+// InclusiveIf returns Inclusive if the argument is true and Exclusive
+// otherwise.
+func InclusiveIf(inclusive bool) InclusiveOrExclusive {
+	if inclusive {
+		return Inclusive
+	}
+	return Exclusive
+}
+
 func MakeStartEndpoint[B Boundary](startBoundary B, startTyp InclusiveOrExclusive) Endpoint[B] {
 	return Endpoint[B]{
 		B:           startBoundary,

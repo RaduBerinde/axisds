@@ -114,12 +114,7 @@ func (p endpointParser[B]) ParseInterval(
 	if err != nil {
 		return start, end, "", err
 	}
-	typ1, typ2 := Inclusive, Inclusive
-	if matches[1] == "(" {
-		typ1 = Exclusive
-	}
-	if matches[4] == ")" {
-		typ2 = Exclusive
-	}
+	typ1 := InclusiveIf(matches[1] == "[")
+	typ2 := InclusiveIf(matches[4] == "]")
 	return MakeStartEndpoint(b1, typ1), MakeEndEndpoint(b2, typ2), matches[5], nil
 }
