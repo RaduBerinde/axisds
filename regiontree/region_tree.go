@@ -208,6 +208,11 @@ func (t *T[B, P]) IsEmpty() bool {
 	return t.tree.Len() < 2
 }
 
+// InternalLen returns the number of region boundaries stored internally.
+func (t *T[B, P]) InternalLen() int {
+	return t.tree.Len()
+}
+
 // Clone creates a lazy clone of T with the same properties and regions. The new
 // tree can be modified independently.
 //
