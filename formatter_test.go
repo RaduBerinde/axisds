@@ -17,22 +17,20 @@ package axisds
 import "testing"
 
 func TestFormatters(t *testing.T) {
-	bFmt := MakeBasicFormatter[int]()
-	expect(t, bFmt.FormatInterval(1, 5), "[1, 5)")
+	bFmt := MakeBoundaryFormatter[int]()
+	expect(t, bFmt(1), "1")
+	iFmt := MakeIntervalFormatter(bFmt)
+	expect(t, iFmt(1, 5), "[1, 5)")
 
-	eFmt := MakeEndpointFormatter[int](bFmt)
+	eFmt := MakeEndpointIntervalFormatter(bFmt)
 
 	str := func(start, end Endpoint[int]) string {
-		return eFmt.FormatInterval(start, end)
+		return eFmt(start, end)
 	}
 	expect(t, str(MakeEndpoints(1, Inclusive, 5, Inclusive)), "[1, 5]")
 	expect(t, str(MakeEndpoints(1, Inclusive, 5, Exclusive)), "[1, 5)")
 	expect(t, str(MakeEndpoints(1, Exclusive, 5, Inclusive)), "(1, 5]")
 	expect(t, str(MakeEndpoints(1, Exclusive, 5, Exclusive)), "(1, 5)")
-
-	x, y := MakeEndpoints(1, Exclusive, 5, Exclusive)
-	expect(t, eFmt.FormatBoundary(x), "1+")
-	expect(t, eFmt.FormatBoundary(y), "5")
 }
 
 func expect[T comparable](t *testing.T, actual, expected T) {

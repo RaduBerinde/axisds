@@ -16,57 +16,40 @@ package axisds
 
 import "fmt"
 
-// Formatter is an interface for formatting boundaries and intervals.
-type Formatter[B Boundary] interface {
-	// FormatBoundary formats a "bare" boundary. Used by Endpoint[B].
-	FormatBoundary(b B) string
-	// FormatInterval formats an interval with the given boundaries.
-	FormatInterval(start, end B) string
-}
+// BoundaryFormatter is used to print boundaries.
+type BoundaryFormatter[B Boundary] func(b B) string
 
-// MakeBasicFormatter creates a Formatter[B] that uses the `%v` format for the
-// boundaries.
-func MakeBasicFormatter[B Boundary]() Formatter[B] {
-	return basicFormatter[B]{}
-}
-
-// MakeEndpointFormatter creates a Formatter[Endpoint[B]].
-func MakeEndpointFormatter[B Boundary](bFmt Formatter[B]) Formatter[Endpoint[B]] {
-	return &endpointFormatter[B]{bFmt: bFmt}
-}
-
-type basicFormatter[B Boundary] struct{}
-
-func (basicFormatter[B]) FormatBoundary(b B) string {
-	return fmt.Sprint(b)
-}
-
-var _ Formatter[int] = basicFormatter[int]{}
-
-func (basicFormatter[B]) FormatInterval(start, end B) string {
-	return fmt.Sprintf("[%v, %v)", start, end)
-}
-
-type endpointFormatter[B Boundary] struct {
-	bFmt Formatter[B]
-}
-
-var _ Formatter[Endpoint[int]] = &endpointFormatter[int]{}
-
-func (f *endpointFormatter[B]) FormatBoundary(e Endpoint[B]) string {
-	s := f.bFmt.FormatBoundary(e.B)
-	if e.PlusEpsilon {
-		s += "+"
+// MakeBoundaryFormatter creates a BoundaryFormatter[B] that uses fmt.Sprint().
+func MakeBoundaryFormatter[B Boundary]() BoundaryFormatter[B] {
+	return func(b B) string {
+		return fmt.Sprint(b)
 	}
-	return s
 }
-func (f *endpointFormatter[B]) FormatInterval(start, end Endpoint[B]) string {
-	c1, c2 := '[', ')'
-	if start.PlusEpsilon {
-		c1 = '('
+
+// IntervalFormatter is used to print intervals.
+type IntervalFormatter[B Boundary] func(start, end B) string
+
+// MakeIntervalFormatter creates an IntervalFormatter[B] which uses the given
+// formatter for B.
+func MakeIntervalFormatter[B Boundary](bFmt BoundaryFormatter[B]) IntervalFormatter[B] {
+	return func(start, end B) string {
+		return fmt.Sprintf("[%s, %s)", bFmt(start), bFmt(end))
 	}
-	if end.PlusEpsilon {
-		c2 = ']'
+}
+
+// MakeEndpointIntervalFormatter creates an IntervalFormatter[Endpoint[B]] which
+// uses the given formatter for B.
+func MakeEndpointIntervalFormatter[B Boundary](
+	bFmt BoundaryFormatter[B],
+) IntervalFormatter[Endpoint[B]] {
+	return func(start, end Endpoint[B]) string {
+		c1, c2 := '[', ')'
+		if start.PlusEpsilon {
+			c1 = '('
+		}
+		if end.PlusEpsilon {
+			c2 = ']'
+		}
+		return fmt.Sprintf("%c%s, %s%c", c1, bFmt(start.B), bFmt(end.B), c2)
 	}
-	return fmt.Sprintf("%c%s, %s%c", c1, f.bFmt.FormatBoundary(start.B), f.bFmt.FormatBoundary(end.B), c2)
 }

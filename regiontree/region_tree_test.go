@@ -31,20 +31,29 @@ const debug = false
 
 func TestDataDriven(t *testing.T) {
 	t.Run("ints", func(t *testing.T) {
-		testDataDriven(t, "testdata/ints", cmp.Compare[int], axisds.MakeBasicFormatter[int](), axisds.MakeBasicParser[int]())
+		testDataDriven(
+			t, "testdata/ints",
+			cmp.Compare[int],
+			axisds.MakeIntervalFormatter(axisds.MakeBoundaryFormatter[int]()),
+			axisds.MakeBasicParser[int](),
+		)
 	})
 	t.Run("endpoints-ints", func(t *testing.T) {
 		testDataDriven(
 			t, "testdata/endpoints-ints",
 			axisds.EndpointCompareFn(cmp.Compare[int]),
-			axisds.MakeEndpointFormatter(axisds.MakeBasicFormatter[int]()),
+			axisds.MakeEndpointIntervalFormatter(axisds.MakeBoundaryFormatter[int]()),
 			axisds.MakeEndpointParser(axisds.MakeBasicParser[int]()),
 		)
 	})
 }
 
 func testDataDriven[B Boundary](
-	t *testing.T, path string, cmpFn func(a, b B) int, f axisds.Formatter[B], p axisds.Parser[B],
+	t *testing.T,
+	path string,
+	cmpFn func(a, b B) int,
+	iFmt axisds.IntervalFormatter[B],
+	p axisds.Parser[B],
 ) {
 	// lowWatermark is a value that we can increase which makes any value <
 	// lowWatermark be equivalent to 0.
@@ -86,7 +95,7 @@ func testDataDriven[B Boundary](
 			td.Fatalf(t, "unknown command: %q", td.Cmd)
 		}
 		buf.WriteString("regions:\n")
-		for _, l := range strings.Split(strings.TrimSpace(rt.String(f)), "\n") {
+		for _, l := range strings.Split(strings.TrimSpace(rt.String(iFmt)), "\n") {
 			fmt.Fprintf(&buf, "  %s\n", l)
 		}
 		return buf.String()

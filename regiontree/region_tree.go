@@ -222,14 +222,14 @@ func (t *T[B, P]) Clone() T[B, P] {
 }
 
 // String formats all regions, one per line.
-func (t *T[B, P]) String(bFmt axisds.Formatter[B]) string {
+func (t *T[B, P]) String(iFmt axisds.IntervalFormatter[B]) string {
 	var b strings.Builder
 	// We don't use EnumerateAll because we don't want String() to modify the
 	// structure (it is typically used for testing or debugging).
 	var eh enumerateHelper[B, P]
 	t.tree.Ascend(func(r region[B, P]) bool {
 		eh.addRegion(r.start, r.prop, t.propEq, func(start, end B, prop P) bool {
-			fmt.Fprintf(&b, "%s = %v\n", bFmt.FormatInterval(start, end), prop)
+			fmt.Fprintf(&b, "%s = %v\n", iFmt(start, end), prop)
 			return true
 		})
 		return true

@@ -113,17 +113,17 @@ func testParse[B Boundary](
 
 func TestFormatParseRoundtrip(t *testing.T) {
 	t.Run("int", func(t *testing.T) {
-		f := MakeBasicFormatter[int]()
+		f := MakeIntervalFormatter(MakeBoundaryFormatter[int]())
 		p := MakeBasicParser[int]()
 		testRoundtrip(t, f, p, 1, 2)
 	})
 	t.Run("string", func(t *testing.T) {
-		f := MakeBasicFormatter[string]()
+		f := MakeIntervalFormatter(MakeBoundaryFormatter[string]())
 		p := MakeBasicParser[string]()
 		testRoundtrip(t, f, p, "a", "bc")
 	})
 	t.Run("endpoints-int", func(t *testing.T) {
-		f := MakeEndpointFormatter(MakeBasicFormatter[int]())
+		f := MakeEndpointIntervalFormatter(MakeBoundaryFormatter[int]())
 		p := MakeEndpointParser(MakeBasicParser[int]())
 		testRoundtrip(t, f, p, MakeStartEndpoint(1, Inclusive), MakeEndEndpoint(2, Exclusive))
 		testRoundtrip(t, f, p, MakeStartEndpoint(1, Exclusive), MakeEndEndpoint(2, Exclusive))
@@ -131,7 +131,7 @@ func TestFormatParseRoundtrip(t *testing.T) {
 		testRoundtrip(t, f, p, MakeStartEndpoint(1, Exclusive), MakeEndEndpoint(2, Inclusive))
 	})
 	t.Run("endpoints-string", func(t *testing.T) {
-		f := MakeEndpointFormatter(MakeBasicFormatter[string]())
+		f := MakeEndpointIntervalFormatter(MakeBoundaryFormatter[string]())
 		p := MakeEndpointParser(MakeBasicParser[string]())
 		testRoundtrip(t, f, p, MakeStartEndpoint("a", Inclusive), MakeEndEndpoint("b", Exclusive))
 		testRoundtrip(t, f, p, MakeStartEndpoint("ab", Exclusive), MakeEndEndpoint("ac", Exclusive))
@@ -140,8 +140,8 @@ func TestFormatParseRoundtrip(t *testing.T) {
 	})
 }
 
-func testRoundtrip[B Boundary](t *testing.T, f Formatter[B], p Parser[B], start, end B) {
-	str := f.FormatInterval(start, end)
+func testRoundtrip[B Boundary](t *testing.T, iFmt IntervalFormatter[B], p Parser[B], start, end B) {
+	str := iFmt(start, end)
 	x, y := MustParseInterval(p, str)
 	if !reflect.DeepEqual(x, start) || !reflect.DeepEqual(y, end) {
 		t.Fatalf("roundtrip %v %v failed: %v %v\n", start, end, x, y)
