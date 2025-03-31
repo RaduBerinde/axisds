@@ -1,8 +1,8 @@
-# RegionTree
+# Region Tree
 
 ## Overview
 
-**RegionTree** is a data structure that partitions a one-dimensional space into
+Region Tree is a data structure that partitions a one-dimensional space into
 contiguous segments (called *regions*), each associated with a value (called a
 *property*). It is useful for representing piecewise-constant data along a line
 (such as time intervals, indices, or coordinates) and supports efficient updates
@@ -37,16 +37,16 @@ which helps keep the representation compact and easy to manage.
 
 ## How It Works
 
-RegionTree maintains a set of **boundary points** that divide the line into
+Region Tree maintains a set of **boundary points** that divide the line into
 contiguous regions. Each region covers the half-open interval from one boundary
 up to (but not including) the next boundary, and has an associated property
 value. By convention, the area up to the first boundary is considered to have
 the "zero" property (the default value for the property type). The data
 structure aims to store only boundaries where the property changes.
 
-Internally, RegionTree uses a B-tree to store the regions by their start
+Internally, the region tree uses a B-tree to store the regions by their start
 boundary, enabling logarithmic search and update. However, you do not need to
-interact with the B-tree directly - the `RegionTree` API provides
+interact with the B-tree directly - the region tree API provides
 high-level methods to update and query the structure.
 
 ## Usage Examples
@@ -55,7 +55,7 @@ Below are simple examples illustrating how to create a region tree, update
 regions, and query them. These examples use integer boundaries and integer
 properties for simplicity.
 
-### Creating a RegionTree
+### Creating a Region Tree
 
 To create a region tree, you call the `Make` function with a comparison
 function for the boundary type and an equality function for the property type.
@@ -70,7 +70,7 @@ import (
 )
 
 func main() {
-    // Create a RegionTree with int boundaries and int properties.
+    // Create a region tree with int boundaries and int properties.
     // Use a default integer comparison and equality check.
     rt := regiontree.Make[int, int](
         cmp.Compare[int],           // comparison for boundaries
@@ -128,7 +128,7 @@ rt.Update(30, 40, func(oldValue int) int {
 Now the interval [10, 40) will become one continuous region with property 1.
 Initially, a boundary at 30 was present, but after the second update the
 properties on both sides of that boundary are equal (both sides became 1), so
-RegionTree removes the unnecessary boundary at 30. The regions [10, 30) and
+the region tree removes the unnecessary boundary at 30. The regions [10, 30) and
 [30, 40) coalesce into a single region [10, 40) = 1.
 
 ### Overlapping Updates and Automatic Splitting
@@ -144,8 +144,8 @@ rt.Update(15, 25, func(oldValue int) int {
 ```
 
 Before this update, we had [10, 40) = 1. The update [15, 25) = 2 intersects the
-middle of [10, 40). RegionTree will handle this by splitting the original region
-into pieces and assigning new values accordingly:
+middle of [10, 40). The region tree will handle this by splitting the original
+region into pieces and assigning new values accordingly:
 - [10, 15) remains with property 1 (the portion before 15, unchanged).
 - [15, 25) will have property 2 (the updated range).
 - [25, 40) reverts to property 1 (the portion after 25, which was part of the
