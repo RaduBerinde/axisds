@@ -64,9 +64,9 @@ equality check:
 
 ```go
 import (
+	"cmp"
     "fmt"
     "github.com/RaduBerinde/axisds/regiontree"
-    "github.com/RaduBerinde/axisds/cmp"  // hypothetical comparison package
 )
 
 func main() {
