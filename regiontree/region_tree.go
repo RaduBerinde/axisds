@@ -31,9 +31,12 @@ type Property any
 // PropertyEqualFn is a function used to compare properties of two regions. If
 // it returns true, the two property values can be used interchangeably.
 //
-// Note that it is allowed for the function to "evolve" over time, with values
-// that were not equal becoming equal (but not the opposite: once two values are
-// equal, they must stay equal forever).
+// Note that it is allowed for the function to "evolve" over time (but not
+// concurrently with a region tree method), with values that were not equal
+// becoming equal (but not the opposite: once two values are equal, they must
+// stay equal forever). For example, the property can be a monotonic expiration
+// time and as we update the current time, expired times become equal to the
+// zero property.
 //
 // A zero property value is any value that is equal to the zero P value.
 type PropertyEqualFn[P Property] func(a, b P) bool
@@ -77,19 +80,122 @@ func Make[B Boundary, P Property](cmp axisds.CompareFn[B], propEq PropertyEqualF
 // are updating. Note that if the ranges we update are mostly non-overlapping,
 // this will be O(log N) on average.
 func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
-	t.ensureBoundary(start)
-	t.ensureBoundary(end)
+	// Get information about the region before start.
+	startBoundaryExists, beforeProp := t.startBoundaryInfo(start)
+	endBoundaryExists, afterProp := t.endBoundaryInfo(end)
 
-	var toUpdate []region[B, P]
-	// Collect all regions in the range that need to be updated.
+	lastProp := beforeProp
+	var startProp P
+	var addStartBoundary bool
+	if !startBoundaryExists {
+		// See if we need to add the start boundary.
+		startProp = updateProp(beforeProp)
+		if !t.propEq(startProp, lastProp) {
+			// We will add the start boundary with startProp.
+			addStartBoundary = true
+		}
+		lastProp = startProp
+	}
+
+	type update struct {
+		r      region[B, P]
+		delete bool
+	}
+	var updates []update
+	// Collect all the boundaries in the range that need to be updated or deleted.
 	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
-		toUpdate = append(toUpdate, region[B, P]{start: r.start, prop: updateProp(r.prop)})
+		prop := updateProp(r.prop)
+		if t.propEq(prop, lastProp) {
+			// Boundary not necessary; remove it.
+			updates = append(updates, update{r: r, delete: true})
+		} else if !t.propEq(prop, r.prop) {
+			updates = append(updates, update{r: region[B, P]{start: r.start, prop: prop}, delete: false})
+		}
+		lastProp = prop
 		return true
 	})
-	for _, r := range toUpdate {
-		t.tree.ReplaceOrInsert(r)
+
+	if addStartBoundary {
+		t.tree.ReplaceOrInsert(region[B, P]{start: start, prop: startProp})
 	}
-	t.optimizeRange(start, end)
+
+	for _, u := range updates {
+		if u.delete {
+			t.tree.Delete(u.r)
+		} else {
+			t.tree.ReplaceOrInsert(u.r)
+		}
+	}
+
+	if t.propEq(lastProp, afterProp) {
+		if endBoundaryExists {
+			// End boundary can be removed.
+			t.tree.Delete(region[B, P]{start: end})
+		}
+	} else {
+		if !endBoundaryExists {
+			// End boundary needs to be added.
+			t.tree.ReplaceOrInsert(region[B, P]{start: end, prop: afterProp})
+		}
+	}
+}
+
+// startBoundaryInfo checks if the boundary exists and returns the property
+// for the region that contains or ends at the boundary.
+//
+// exists=true:
+//
+//	                  start
+//	                    |
+//	                    v
+//	---|---beforeProp---|---------|---
+//
+// exists=false:
+//
+//	         start
+//	           |
+//	           v
+//	---|---beforeProp---|---
+//
+// If no regions contain start, beforeProp is zero.
+func (t *T[B, P]) startBoundaryInfo(start B) (exists bool, beforeProp P) {
+	t.tree.DescendLessOrEqual(region[B, P]{start: start}, func(r region[B, P]) bool {
+		if !exists && t.cmp(r.start, start) == 0 {
+			exists = true
+			// Do one more step to get the property before the boundary.
+			return true
+		}
+		beforeProp = r.prop
+		return false
+	})
+	return exists, beforeProp
+}
+
+// startBoundaryInfo checks if the boundary exists and returns the property
+// for the region that contains or starts at the boundary.
+//
+// exists=true:
+//
+//	              end
+//	               |
+//	               v
+//	---|-----------|---afterProp---|---
+//
+// exists=false:
+//
+//	          end
+//	           |
+//	           v
+//	---|---afterProp---|---
+//
+// If no regions contain end, afterProp is zero.
+func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
+	t.tree.DescendLessOrEqual(region[B, P]{start: end}, func(r region[B, P]) bool {
+		exists = t.cmp(r.start, end) == 0
+		afterProp = r.prop
+		return false
+	})
+	return exists, afterProp
 }
 
 // Enumerate all regions in the range [start, end) with non-zero property.
@@ -107,23 +213,52 @@ func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) 
 	// find the region that contains it.
 	t.tree.DescendLessOrEqual(region[B, P]{start: start}, func(r region[B, P]) bool {
 		if t.cmp(r.start, start) < 0 {
-			// This is the first addRegion call, so we won't emit anything,.
+			// This is the first addRegion call, so we won't emit anything.
 			eh.addRegion(start, r.prop, t.propEq, nil)
 		}
 		return false
 	})
-	var toDelete []region[B, P]
+	var toDelete []B
 	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
 		eh.addRegion(r.start, r.prop, t.propEq, emit)
 		if eh.canDeleteLastBoundary {
-			toDelete = append(toDelete, r)
+			toDelete = append(toDelete, r.start)
 		}
 		return !eh.stopEmitting
 	})
 	eh.finish(end, t.propEq, emit)
 	for _, b := range toDelete {
-		t.tree.Delete(b)
+		t.tree.Delete(region[B, P]{start: b})
 	}
+}
+
+// Any returns true if [start, end) overlaps any region with property that
+// satisfies the given function.
+func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
+	if t.cmp(start, end) >= 0 {
+		return false
+	}
+	startBoundaryExists, lastProp := t.startBoundaryInfo(start)
+	if !startBoundaryExists && propFn(lastProp) {
+		return true
+	}
+	found := false
+	var toDelete []B
+	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
+		if t.propEq(r.prop, lastProp) {
+			toDelete = append(toDelete, r.start)
+		}
+		lastProp = r.prop
+		if propFn(r.prop) {
+			found = true
+			return false
+		}
+		return true
+	})
+	for _, b := range toDelete {
+		t.tree.Delete(region[B, P]{start: b})
+	}
+	return found
 }
 
 // EnumerateAll emits all regions with non-zero property.
@@ -251,10 +386,8 @@ func (t *T[B, P]) CheckInvariants() {
 	var lastProp P
 	lastBoundarySet := false
 	t.tree.Ascend(func(r region[B, P]) bool {
-		if lastBoundarySet {
-			if t.cmp(lastBoundary, r.start) >= 0 {
-				panic("region boundaries not increasing")
-			}
+		if lastBoundarySet && t.cmp(lastBoundary, r.start) >= 0 {
+			panic("region boundaries not increasing")
 		}
 		if !t.propEq(r.prop, r.prop) {
 			panic("region property is not equal to itself")
@@ -266,10 +399,8 @@ func (t *T[B, P]) CheckInvariants() {
 	})
 
 	// Last region should have the zero property.
-	if lastBoundarySet {
-		var zeroProp P
-		if !t.propEq(lastProp, zeroProp) {
-			panic("last region must always have zero property")
-		}
+	var zeroProp P
+	if !t.propEq(lastProp, zeroProp) {
+		panic("last region must always have zero property")
 	}
 }

@@ -94,6 +94,7 @@ func testDataDriven[B Boundary](
 		default:
 			td.Fatalf(t, "unknown command: %q", td.Cmd)
 		}
+		rt.CheckInvariants()
 		buf.WriteString("regions:\n")
 		for _, l := range strings.Split(strings.TrimSpace(rt.String(iFmt)), "\n") {
 			fmt.Fprintf(&buf, "  %s\n", l)
@@ -104,9 +105,14 @@ func testDataDriven[B Boundary](
 
 func TestRegionTreeRand(t *testing.T) {
 	for test := 0; test < 100; test++ {
-		var log bytes.Buffer
 		seed := rand.Uint64()
 		rng := rand.New(rand.NewPCG(seed, seed))
+
+		var debugLog bytes.Buffer
+		fmt.Fprintf(&debugLog, "seed: %d", seed)
+		if debug {
+			fmt.Fprintf(&debugLog, "\nlog:\n")
+		}
 
 		rt := Make[int, int](cmp.Compare[int], func(a, b int) bool { return a == b })
 		n := naiveInts{}
@@ -120,18 +126,46 @@ func TestRegionTreeRand(t *testing.T) {
 			if a > b {
 				a, b = b, a
 			}
-			if rng.IntN(5) == 0 {
+
+			switch rng.IntN(10) {
+			case 0:
 				delta := rng.IntN(10) - 5
 				rt.Update(a, b, func(p int) int { return p + delta })
 				n.Add(a, b, delta)
 				if debug {
-					fmt.Fprintf(&log, "[%d, %d) += %d\n", a, b, delta)
+					fmt.Fprintf(&debugLog, "[%d, %d) += %d\n", a, b, delta)
 					rt.tree.Ascend(func(r region[int, int]) bool {
-						fmt.Fprintf(&log, "  region: [%d, = %d\n", r.start, r.prop)
+						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", r.start, r.prop)
 						return true
 					})
 				}
-			} else {
+
+			case 1:
+				value := rng.IntN(10) - 5
+				rt.Update(a, b, func(p int) int { return value })
+				n.Set(a, b, value)
+				if debug {
+					fmt.Fprintf(&debugLog, "[%d, %d) = %d\n", a, b, value)
+					rt.tree.Ascend(func(r region[int, int]) bool {
+						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", r.start, r.prop)
+						return true
+					})
+				}
+
+			case 2:
+				value := rng.IntN(10) - 5
+				actual := rt.Any(a, b, func(prop int) bool { return prop == value })
+				expected := n.Any(a, b, func(prop int) bool { return prop == value })
+				if actual != expected {
+					t.Fatalf("Any(%d,%d,%d) mismatch: expected %t, got %t\n%s", a, b, value, expected, actual, debugLog.String())
+				}
+
+			case 3:
+				if exp, actual := n.IsEmpty(), rt.IsEmpty(); exp != actual {
+					t.Fatalf("IsEmpty %t instead of %t\n%s", actual, exp, debugLog.String())
+				}
+
+			default:
 				var b1, b2 strings.Builder
 				rt.Enumerate(a, b, func(start, end, val int) bool {
 					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", start, end, val)
@@ -141,20 +175,10 @@ func TestRegionTreeRand(t *testing.T) {
 					fmt.Fprintf(&b2, "  [%d, %d) = %d\n", start, end, val)
 				})
 				if b1.String() != b2.String() {
-					if debug {
-						fmt.Printf("log:\n%s\n", log.String())
-					}
-					t.Fatalf("Enumerate(%d,%d) mismatch:\n%sexpected:\n%s\nseed: %d", a, b, b1.String(), b2.String(), seed)
-				}
-				if rng.IntN(4) == 0 {
-					if exp, actual := n.IsEmpty(), rt.IsEmpty(); exp != actual {
-						if debug {
-							fmt.Printf("log:\n%s\n", log.String())
-						}
-						t.Fatalf("IsEmpty %t instead of %t\nseed: %d", actual, exp, seed)
-					}
+					t.Fatalf("Enumerate(%d,%d) mismatch:\n%sexpected:\n%s\n%s", a, b, b1.String(), b2.String(), debugLog.String())
 				}
 			}
+
 			rt.CheckInvariants()
 		}
 	}
@@ -169,6 +193,12 @@ type naiveInts struct {
 func (n *naiveInts) Add(start int, end int, delta int) {
 	for i := start; i < end; i++ {
 		n.values[i] += delta
+	}
+}
+
+func (n *naiveInts) Set(start int, end int, value int) {
+	for i := start; i < end; i++ {
+		n.values[i] = value
 	}
 }
 
@@ -190,6 +220,15 @@ func (n *naiveInts) Enumerate(start int, end int, emit func(start, end, val int)
 	if lastVal != 0 {
 		emit(lastBoundary, end, lastVal)
 	}
+}
+
+func (n *naiveInts) Any(start int, end int, fn func(int) bool) bool {
+	for i := start; i < end; i++ {
+		if fn(n.values[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *naiveInts) IsEmpty() bool {
