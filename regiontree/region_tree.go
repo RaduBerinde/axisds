@@ -66,7 +66,7 @@ func Make[B Boundary, P Property](cmp axisds.CompareFn[B], propEq PropertyEqualF
 	lessFn := func(a, b region[B, P]) bool {
 		return cmp(a.start, b.start) < 0
 	}
-	t.tree = btree.NewG[region[B, P]](4, lessFn)
+	t.tree = btree.NewG[region[B, P]](8, lessFn)
 	return t
 }
 
