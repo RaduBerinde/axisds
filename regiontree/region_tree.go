@@ -204,7 +204,25 @@ func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
 // properties are not equal.
 //
 // Enumerate stops once emit() returns false.
+//
+// Enumerate can be called concurrently with other read-only methods (Enumerate,
+// EnumerateAll, Any).
 func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) {
+	t.enumerate(start, end, emit, false /* with GC */)
+}
+
+// EnumerateWithGC is a variant of Enumerate which internally deletes
+// unnecessary boundaries between regions with properties that have become
+// equal.
+//
+// This variant is only useful to improve performance when the PropertyEqualFn
+// can change over time. It cannot be called concurrently with any other
+// methods.
+func (t *T[B, P]) EnumerateWithGC(start, end B, emit func(start, end B, prop P) bool) {
+	t.enumerate(start, end, emit, true /* with GC */)
+}
+
+func (t *T[B, P]) enumerate(start, end B, emit func(start, end B, prop P) bool, withGC bool) {
 	if t.tree.Len() < 2 || t.cmp(start, end) >= 0 {
 		return
 	}
@@ -221,7 +239,7 @@ func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) 
 	var toDelete []B
 	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
 		eh.addRegion(r.start, r.prop, t.propEq, emit)
-		if eh.canDeleteLastBoundary {
+		if withGC && eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, r.start)
 		}
 		return !eh.stopEmitting
@@ -234,7 +252,26 @@ func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) 
 
 // Any returns true if [start, end) overlaps any region with property that
 // satisfies the given function.
+//
+// Any can be called concurrently with other read-only methods (Enumerate,
+// EnumerateAll, Any).
 func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
+	return t.any(start, end, propFn, false /* withGC */)
+}
+
+// AnyWithGC is a variant of Any which internally deletes unnecessary boundaries
+// between regions with properties that have become equal.
+//
+// This variant is only useful to improve performance when the PropertyEqualFn
+// can change over time. It cannot be called concurrently with any other
+// methods.
+func (t *T[B, P]) AnyWithGC(start, end B, propFn func(prop P) bool) bool {
+	return t.any(start, end, propFn, true /* withGC */)
+}
+
+// Any returns true if [start, end) overlaps any region with property that
+// satisfies the given function.
+func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool {
 	if t.cmp(start, end) >= 0 {
 		return false
 	}
@@ -245,7 +282,7 @@ func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
 	found := false
 	var toDelete []B
 	t.tree.AscendRange(region[B, P]{start: start}, region[B, P]{start: end}, func(r region[B, P]) bool {
-		if t.propEq(r.prop, lastProp) {
+		if withGC && t.propEq(r.prop, lastProp) {
 			toDelete = append(toDelete, r.start)
 		}
 		lastProp = r.prop
@@ -267,7 +304,25 @@ func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
 // properties are not equal.
 //
 // EnumerateAll stops once emit() returns false.
+//
+// Enumerate can be called concurrently with other read-only methods (Enumerate,
+// EnumerateAll, Any).
 func (t *T[B, P]) EnumerateAll(emit func(start, end B, prop P) bool) {
+	t.enumerateAll(emit, false /* withGC */)
+}
+
+// EnumerateAllWithGC is a variant of EnumerateAll which internally deletes
+// unnecessary boundaries between regions with properties that have become
+// equal.
+//
+// This variant is only useful to improve performance when the PropertyEqualFn
+// can change over time. It cannot be called concurrently with any other
+// methods.
+func (t *T[B, P]) EnumerateAllWithGC(emit func(start, end B, prop P) bool) {
+	t.enumerateAll(emit, true /* withGC */)
+}
+
+func (t *T[B, P]) enumerateAll(emit func(start, end B, prop P) bool, withGC bool) {
 	var eh enumerateHelper[B, P]
 	var toDelete []region[B, P]
 	t.tree.Ascend(func(r region[B, P]) bool {
@@ -364,8 +419,6 @@ func (t *T[B, P]) Clone() T[B, P] {
 // String formats all regions, one per line.
 func (t *T[B, P]) String(iFmt axisds.IntervalFormatter[B]) string {
 	var b strings.Builder
-	// We don't use EnumerateAll because we don't want String() to modify the
-	// structure (it is typically used for testing or debugging).
 	var eh enumerateHelper[B, P]
 	t.tree.Ascend(func(r region[B, P]) bool {
 		eh.addRegion(r.start, r.prop, t.propEq, func(start, end B, prop P) bool {

@@ -154,7 +154,8 @@ func TestRegionTreeRand(t *testing.T) {
 
 			case 2:
 				value := rng.IntN(10) - 5
-				actual := rt.Any(a, b, func(prop int) bool { return prop == value })
+				withGC := rand.IntN(2) == 0
+				actual := rt.any(a, b, func(prop int) bool { return prop == value }, withGC)
 				expected := n.Any(a, b, func(prop int) bool { return prop == value })
 				if actual != expected {
 					t.Fatalf("Any(%d,%d,%d) mismatch: expected %t, got %t\n%s", a, b, value, expected, actual, debugLog.String())
@@ -167,10 +168,11 @@ func TestRegionTreeRand(t *testing.T) {
 
 			default:
 				var b1, b2 strings.Builder
-				rt.Enumerate(a, b, func(start, end, val int) bool {
+				withGC := rand.IntN(2) == 0
+				rt.enumerate(a, b, func(start, end, val int) bool {
 					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", start, end, val)
 					return true
-				})
+				}, withGC)
 				n.Enumerate(a, b, func(start, end, val int) {
 					fmt.Fprintf(&b2, "  [%d, %d) = %d\n", start, end, val)
 				})
