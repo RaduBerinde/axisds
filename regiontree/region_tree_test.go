@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/RaduBerinde/axisds"
+	"github.com/RaduBerinde/btreemap"
 	"github.com/cockroachdb/datadriven"
 )
 
@@ -134,10 +135,9 @@ func TestRegionTreeRand(t *testing.T) {
 				n.Add(a, b, delta)
 				if debug {
 					fmt.Fprintf(&debugLog, "[%d, %d) += %d\n", a, b, delta)
-					rt.tree.Ascend(func(r region[int, int]) bool {
-						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", r.start, r.prop)
-						return true
-					})
+					for start, prop := range rt.tree.Ascend(btreemap.Min[int](), btreemap.Max[int]()) {
+						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", start, prop)
+					}
 				}
 
 			case 1:
@@ -146,10 +146,9 @@ func TestRegionTreeRand(t *testing.T) {
 				n.Set(a, b, value)
 				if debug {
 					fmt.Fprintf(&debugLog, "[%d, %d) = %d\n", a, b, value)
-					rt.tree.Ascend(func(r region[int, int]) bool {
-						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", r.start, r.prop)
-						return true
-					})
+					for start, prop := range rt.tree.Ascend(btreemap.Min[int](), btreemap.Max[int]()) {
+						fmt.Fprintf(&debugLog, "  region: [%d, = %d\n", start, prop)
+					}
 				}
 
 			case 2:
