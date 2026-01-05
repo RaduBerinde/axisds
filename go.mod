@@ -3,7 +3,7 @@ module github.com/RaduBerinde/axisds
 go 1.23
 
 require (
-	github.com/RaduBerinde/btreemap v0.0.0-20250419174037-3d62b7205d54
+	github.com/RaduBerinde/btreemap v0.0.0-20260105202824-d3184786f603
 	github.com/cockroachdb/datadriven v1.0.2
 )
 
