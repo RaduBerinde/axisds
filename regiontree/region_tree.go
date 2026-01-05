@@ -16,6 +16,7 @@ package regiontree
 
 import (
 	"fmt"
+	"iter"
 	"strings"
 
 	"github.com/RaduBerinde/axisds"
@@ -162,8 +163,8 @@ func (t *T[B, P]) startBoundaryInfo(start B) (exists bool, beforeProp P) {
 	return exists, beforeProp
 }
 
-// startBoundaryInfo checks if the boundary exists and returns the property
-// for the region that contains or starts at the boundary.
+// endBoundaryInfo checks if the boundary exists and returns the property for
+// the region that contains or starts at the boundary.
 //
 // exists=true:
 //
@@ -192,12 +193,11 @@ func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
 //
-// Enumerate stops once emit() returns false.
-//
-// Enumerate can be called concurrently with other read-only methods (Enumerate,
-// EnumerateAll, Any).
-func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) {
-	t.enumerate(start, end, emit, false /* with GC */)
+// Enumerate can be called concurrently with other read-only methods.
+func (t *T[B, P]) Enumerate(start, end B) iter.Seq2[axisds.Interval[B], P] {
+	return func(yield func(i axisds.Interval[B], prop P) bool) {
+		t.enumerate(start, end, yield, false /* no GC */)
+	}
 }
 
 // EnumerateWithGC is a variant of Enumerate which internally deletes
@@ -207,11 +207,15 @@ func (t *T[B, P]) Enumerate(start, end B, emit func(start, end B, prop P) bool) 
 // This variant is only useful to improve performance when the PropertyEqualFn
 // can change over time. It cannot be called concurrently with any other
 // methods.
-func (t *T[B, P]) EnumerateWithGC(start, end B, emit func(start, end B, prop P) bool) {
-	t.enumerate(start, end, emit, true /* with GC */)
+func (t *T[B, P]) EnumerateWithGC(start, end B) iter.Seq2[axisds.Interval[B], P] {
+	return func(yield func(i axisds.Interval[B], prop P) bool) {
+		t.enumerate(start, end, yield, true /* with GC */)
+	}
 }
 
-func (t *T[B, P]) enumerate(start, end B, emit func(start, end B, prop P) bool, withGC bool) {
+func (t *T[B, P]) enumerate(
+	start, end B, emit func(i axisds.Interval[B], prop P) bool, withGC bool,
+) {
 	if t.tree.Len() < 2 || t.cmp(start, end) >= 0 {
 		return
 	}
@@ -241,8 +245,7 @@ func (t *T[B, P]) enumerate(start, end B, emit func(start, end B, prop P) bool, 
 // Any returns true if [start, end) overlaps any region with property that
 // satisfies the given function.
 //
-// Any can be called concurrently with other read-only methods (Enumerate,
-// EnumerateAll, Any).
+// Any can be called concurrently with other read-only methods.
 func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
 	return t.any(start, end, propFn, false /* withGC */)
 }
@@ -285,36 +288,36 @@ func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool 
 	return found
 }
 
-// EnumerateAll emits all regions with non-zero property.
+// All emits all regions with non-zero property.
 //
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
 //
-// EnumerateAll stops once emit() returns false.
-//
-// Enumerate can be called concurrently with other read-only methods (Enumerate,
-// EnumerateAll, Any).
-func (t *T[B, P]) EnumerateAll(emit func(start, end B, prop P) bool) {
-	t.enumerateAll(emit, false /* withGC */)
+// All can be called concurrently with other read-only methods.
+func (t *T[B, P]) All() iter.Seq2[axisds.Interval[B], P] {
+	return func(yield func(i axisds.Interval[B], prop P) bool) {
+		t.all(yield, false /* no GC */)
+	}
 }
 
-// EnumerateAllWithGC is a variant of EnumerateAll which internally deletes
-// unnecessary boundaries between regions with properties that have become
-// equal.
+// AllWithGC is a variant of All which internally deletes unnecessary boundaries
+// between regions with properties that have become equal.
 //
 // This variant is only useful to improve performance when the PropertyEqualFn
 // can change over time. It cannot be called concurrently with any other
 // methods.
-func (t *T[B, P]) EnumerateAllWithGC(emit func(start, end B, prop P) bool) {
-	t.enumerateAll(emit, true /* withGC */)
+func (t *T[B, P]) AllWithGC() iter.Seq2[axisds.Interval[B], P] {
+	return func(yield func(i axisds.Interval[B], prop P) bool) {
+		t.all(yield, true /* with GC */)
+	}
 }
 
-func (t *T[B, P]) enumerateAll(emit func(start, end B, prop P) bool, withGC bool) {
+func (t *T[B, P]) all(emit func(i axisds.Interval[B], prop P) bool, withGC bool) {
 	var eh enumerateHelper[B, P]
 	var toDelete []B
 	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
 		eh.addRegion(rStart, rProp, t.propEq, emit)
-		if eh.canDeleteLastBoundary {
+		if withGC && eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, rStart)
 		}
 		if eh.stopEmitting {
@@ -337,7 +340,7 @@ type enumerateHelper[B Boundary, P Property] struct {
 }
 
 func (eh *enumerateHelper[B, P]) addRegion(
-	boundary B, prop P, propEq PropertyEqualFn[P], emitFn func(start, end B, prop P) bool,
+	boundary B, prop P, propEq PropertyEqualFn[P], emitFn func(i axisds.Interval[B], prop P) bool,
 ) {
 	if !eh.initialized {
 		eh.lastBoundary = boundary
@@ -349,18 +352,22 @@ func (eh *enumerateHelper[B, P]) addRegion(
 	if eh.canDeleteLastBoundary || eh.stopEmitting {
 		return
 	}
-	if !propEq(zero[P](), eh.lastProp) && !emitFn(eh.lastBoundary, boundary, eh.lastProp) {
-		eh.stopEmitting = true
+	if !propEq(zero[P](), eh.lastProp) {
+		interval := axisds.Interval[B]{Start: eh.lastBoundary, End: boundary}
+		if !emitFn(interval, eh.lastProp) {
+			eh.stopEmitting = true
+		}
 	}
 	eh.lastBoundary = boundary
 	eh.lastProp = prop
 }
 
 func (eh *enumerateHelper[B, P]) finish(
-	end B, propEq PropertyEqualFn[P], emitFn func(start, end B, prop P) bool,
+	end B, propEq PropertyEqualFn[P], emitFn func(interval axisds.Interval[B], prop P) bool,
 ) {
 	if eh.initialized && !eh.stopEmitting && !propEq(zero[P](), eh.lastProp) {
-		emitFn(eh.lastBoundary, end, eh.lastProp)
+		interval := axisds.Interval[B]{Start: eh.lastBoundary, End: end}
+		emitFn(interval, eh.lastProp)
 	}
 }
 
@@ -401,8 +408,8 @@ func (t *T[B, P]) String(iFmt axisds.IntervalFormatter[B]) string {
 	var b strings.Builder
 	var eh enumerateHelper[B, P]
 	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
-		eh.addRegion(rStart, rProp, t.propEq, func(start, end B, prop P) bool {
-			fmt.Fprintf(&b, "%s = %v\n", iFmt(axisds.Interval[B]{Start: start, End: end}), prop)
+		eh.addRegion(rStart, rProp, t.propEq, func(i axisds.Interval[B], prop P) bool {
+			fmt.Fprintf(&b, "%s = %v\n", iFmt(i), prop)
 			return true
 		})
 	}

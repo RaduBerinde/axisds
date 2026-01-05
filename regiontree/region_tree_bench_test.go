@@ -72,10 +72,9 @@ func benchRegionTree[B any](
 			// Reset all properties in the range.
 			rt.Update(start, end, func(p int) int { return 0 })
 		default:
-			rt.Enumerate(start, end, func(start, end B, prop int) bool {
+			for _, prop := range rt.Enumerate(start, end) {
 				x += prop
-				return true
-			})
+			}
 		}
 	}
 	fmt.Fprint(io.Discard, x)
