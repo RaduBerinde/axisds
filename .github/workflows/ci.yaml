@@ -31,6 +31,20 @@ jobs:
 
       - run: go test -v ./...
 
+  linux-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.25"
+
+      - run: go install github.com/cockroachdb/stress@latest
+      - run: go test ./... -exec 'stress -p 2 -maxruns 100' -timeout 1h -v
+
+
   linux-race:
     runs-on: ubuntu-latest
     steps:
