@@ -402,7 +402,7 @@ func (t *T[B, P]) String(iFmt axisds.IntervalFormatter[B]) string {
 	var eh enumerateHelper[B, P]
 	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
 		eh.addRegion(rStart, rProp, t.propEq, func(start, end B, prop P) bool {
-			fmt.Fprintf(&b, "%s = %v\n", iFmt(start, end), prop)
+			fmt.Fprintf(&b, "%s = %v\n", iFmt(axisds.Interval[B]{Start: start, End: end}), prop)
 			return true
 		})
 	}

@@ -141,7 +141,7 @@ func TestFormatParseRoundtrip(t *testing.T) {
 }
 
 func testRoundtrip[B Boundary](t *testing.T, iFmt IntervalFormatter[B], p Parser[B], start, end B) {
-	str := iFmt(start, end)
+	str := iFmt(Interval[B]{Start: start, End: end})
 	x, y := MustParseInterval(p, str)
 	if !reflect.DeepEqual(x, start) || !reflect.DeepEqual(y, end) {
 		t.Fatalf("roundtrip %v %v failed: %v %v\n", start, end, x, y)

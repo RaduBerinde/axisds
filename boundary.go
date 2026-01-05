@@ -96,3 +96,9 @@ func EndpointCompareFn[B Boundary](bCmp CompareFn[B]) CompareFn[Endpoint[B]] {
 		}
 	}
 }
+
+// Interval represents the half-open interval [Start, End). See Boundary and
+// Endpoint for more details.
+type Interval[B Boundary] struct {
+	Start, End B
+}
