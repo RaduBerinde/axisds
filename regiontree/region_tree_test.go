@@ -168,8 +168,8 @@ func TestRegionTreeRand(t *testing.T) {
 			default:
 				var b1, b2 strings.Builder
 				withGC := rand.IntN(2) == 0
-				rt.enumerate(a, b, func(start, end, val int) bool {
-					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", start, end, val)
+				rt.enumerate(a, b, func(i axisds.Interval[int], val int) bool {
+					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", i.Start, i.End, val)
 					return true
 				}, withGC)
 				n.Enumerate(a, b, func(start, end, val int) {
@@ -244,10 +244,9 @@ func (n *naiveInts) IsEmpty() bool {
 func TestClone(t *testing.T) {
 	expect := func(rt *T[int, int], vals ...int) {
 		var r [][3]int
-		rt.Enumerate(0, 1000, func(start, end, prop int) bool {
-			r = append(r, [3]int{start, end, prop})
-			return true
-		})
+		for i, prop := range rt.Enumerate(0, 1000) {
+			r = append(r, [3]int{i.Start, i.End, prop})
+		}
 		var exp [][3]int
 		for i := 0; i < len(vals); i += 3 {
 			exp = append(exp, [3]int{vals[i], vals[i+1], vals[i+2]})
