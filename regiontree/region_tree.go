@@ -50,7 +50,7 @@ type T[B Boundary, P Property] struct {
 	cmp    axisds.CompareFn[B]
 	propEq PropertyEqualFn[P]
 	// Tree maps each region start boundary to its property. The region ends at
-	// the next rgion's start boundary. The last region has zero property.
+	// the next region's start boundary. The last region has zero property.
 	tree *btreemap.BTreeMap[B, P]
 }
 
@@ -96,7 +96,7 @@ func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 	}
 	var updates []update
 	// Collect all the boundaries in the range that need to be updated or deleted.
-	t.tree.AscendFunc(btreemap.GE(start), btreemap.LT(end), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.GE(start), btreemap.LT(end)) {
 		prop := updateProp(rProp)
 		if t.propEq(prop, lastProp) {
 			// Boundary not necessary; remove it.
@@ -105,8 +105,7 @@ func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 			updates = append(updates, update{start: rStart, prop: prop, delete: false})
 		}
 		lastProp = prop
-		return true
-	})
+	}
 
 	if addStartBoundary {
 		t.tree.ReplaceOrInsert(start, startProp)
@@ -152,15 +151,14 @@ func (t *T[B, P]) Update(start, end B, updateProp func(p P) P) {
 //
 // If no regions contain start, beforeProp is zero.
 func (t *T[B, P]) startBoundaryInfo(start B) (exists bool, beforeProp P) {
-	t.tree.DescendFunc(btreemap.LE(start), btreemap.Min[B](), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Descend(btreemap.LE(start), btreemap.Min[B]()) {
 		if !exists && t.cmp(rStart, start) == 0 {
 			exists = true
 			// Do one more step to get the property before the boundary.
-			return true
+			continue
 		}
-		beforeProp = rProp
-		return false
-	})
+		return exists, rProp
+	}
 	return exists, beforeProp
 }
 
@@ -183,12 +181,10 @@ func (t *T[B, P]) startBoundaryInfo(start B) (exists bool, beforeProp P) {
 //
 // If no regions contain end, afterProp is zero.
 func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
-	t.tree.DescendFunc(btreemap.LE(end), btreemap.Min[B](), func(rStart B, rProp P) bool {
-		exists = t.cmp(rStart, end) == 0
-		afterProp = rProp
-		return false
-	})
-	return exists, afterProp
+	if rStart, rProp, ok := t.tree.SeekLE(end); ok {
+		return t.cmp(rStart, end) == 0, rProp
+	}
+	return false, afterProp
 }
 
 // Enumerate all regions in the range [start, end) with non-zero property.
@@ -222,21 +218,20 @@ func (t *T[B, P]) enumerate(start, end B, emit func(start, end B, prop P) bool, 
 	var eh enumerateHelper[B, P]
 	// Handle the case where we don't have a boundary equal to start; we have to
 	// find the region that contains it.
-	t.tree.DescendFunc(btreemap.LE(start), btreemap.Min[B](), func(rStart B, rProp P) bool {
-		if t.cmp(rStart, start) < 0 {
-			// This is the first addRegion call, so we won't emit anything.
-			eh.addRegion(start, rProp, t.propEq, nil)
-		}
-		return false
-	})
+	if rStart, rProp, ok := t.tree.SeekLE(start); ok && t.cmp(rStart, start) < 0 {
+		// This is the first addRegion call, so we won't emit anything.
+		eh.addRegion(start, rProp, t.propEq, nil)
+	}
 	var toDelete []B
-	t.tree.AscendFunc(btreemap.GE(start), btreemap.LT(end), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.GE(start), btreemap.LT(end)) {
 		eh.addRegion(rStart, rProp, t.propEq, emit)
 		if withGC && eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, rStart)
 		}
-		return !eh.stopEmitting
-	})
+		if eh.stopEmitting {
+			break
+		}
+	}
 	eh.finish(end, t.propEq, emit)
 	for _, b := range toDelete {
 		t.tree.Delete(b)
@@ -274,17 +269,16 @@ func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool 
 	}
 	found := false
 	var toDelete []B
-	t.tree.AscendFunc(btreemap.GE(start), btreemap.LT(end), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.GE(start), btreemap.LT(end)) {
 		if withGC && t.propEq(rProp, lastProp) {
 			toDelete = append(toDelete, rStart)
 		}
 		lastProp = rProp
 		if propFn(rProp) {
 			found = true
-			return false
+			break
 		}
-		return true
-	})
+	}
 	for _, b := range toDelete {
 		t.tree.Delete(b)
 	}
@@ -318,13 +312,15 @@ func (t *T[B, P]) EnumerateAllWithGC(emit func(start, end B, prop P) bool) {
 func (t *T[B, P]) enumerateAll(emit func(start, end B, prop P) bool, withGC bool) {
 	var eh enumerateHelper[B, P]
 	var toDelete []B
-	t.tree.AscendFunc(btreemap.Min[B](), btreemap.Max[B](), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
 		eh.addRegion(rStart, rProp, t.propEq, emit)
 		if eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, rStart)
 		}
-		return !eh.stopEmitting
-	})
+		if eh.stopEmitting {
+			break
+		}
+	}
 	for _, b := range toDelete {
 		t.tree.Delete(b)
 	}
@@ -353,8 +349,7 @@ func (eh *enumerateHelper[B, P]) addRegion(
 	if eh.canDeleteLastBoundary || eh.stopEmitting {
 		return
 	}
-	var zeroProp P
-	if !propEq(zeroProp, eh.lastProp) && !emitFn(eh.lastBoundary, boundary, eh.lastProp) {
+	if !propEq(zero[P](), eh.lastProp) && !emitFn(eh.lastBoundary, boundary, eh.lastProp) {
 		eh.stopEmitting = true
 	}
 	eh.lastBoundary = boundary
@@ -364,31 +359,23 @@ func (eh *enumerateHelper[B, P]) addRegion(
 func (eh *enumerateHelper[B, P]) finish(
 	end B, propEq PropertyEqualFn[P], emitFn func(start, end B, prop P) bool,
 ) {
-	var zeroProp P
-	if eh.initialized && !eh.stopEmitting && !propEq(zeroProp, eh.lastProp) {
+	if eh.initialized && !eh.stopEmitting && !propEq(zero[P](), eh.lastProp) {
 		emitFn(eh.lastBoundary, end, eh.lastProp)
 	}
 }
 
-// IsEmpty returns true if the set contains no non-expired spans.
+// IsEmpty returns true if the tree contains no regions with non-zero property.
 func (t *T[B, P]) IsEmpty() bool {
 	if t.tree.Len() < 2 {
 		return true
 	}
 	// Check that we have regions with non-zero property.
-	var toDelete []B
-	t.tree.AscendFunc(btreemap.Min[B](), btreemap.Max[B](), func(rStart B, rProp P) bool {
-		var zeroProp P
-		if t.propEq(rProp, zeroProp) {
-			toDelete = append(toDelete, rStart)
-			return true
+	for _, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
+		if !t.propEq(rProp, zero[P]()) {
+			return false
 		}
-		return false
-	})
-	for _, r := range toDelete {
-		t.tree.Delete(r)
 	}
-	return t.tree.Len() < 2
+	return true
 }
 
 // InternalLen returns the number of region boundaries stored internally.
@@ -413,13 +400,12 @@ func (t *T[B, P]) Clone() T[B, P] {
 func (t *T[B, P]) String(iFmt axisds.IntervalFormatter[B]) string {
 	var b strings.Builder
 	var eh enumerateHelper[B, P]
-	t.tree.AscendFunc(btreemap.Min[B](), btreemap.Max[B](), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
 		eh.addRegion(rStart, rProp, t.propEq, func(start, end B, prop P) bool {
 			fmt.Fprintf(&b, "%s = %v\n", iFmt(start, end), prop)
 			return true
 		})
-		return true
-	})
+	}
 	if b.Len() == 0 {
 		return "<empty>"
 	}
@@ -431,7 +417,7 @@ func (t *T[B, P]) CheckInvariants() {
 	var lastBoundary B
 	var lastProp P
 	lastBoundarySet := false
-	t.tree.AscendFunc(btreemap.Min[B](), btreemap.Max[B](), func(rStart B, rProp P) bool {
+	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
 		if lastBoundarySet && t.cmp(lastBoundary, rStart) >= 0 {
 			panic("region boundaries not increasing")
 		}
@@ -441,12 +427,15 @@ func (t *T[B, P]) CheckInvariants() {
 		lastBoundary = rStart
 		lastBoundarySet = true
 		lastProp = rProp
-		return true
-	})
+	}
 
 	// Last region should have the zero property.
-	var zeroProp P
-	if !t.propEq(lastProp, zeroProp) {
+	if !t.propEq(lastProp, zero[P]()) {
 		panic("last region must always have zero property")
 	}
+}
+
+func zero[T any]() T {
+	var t T
+	return t
 }
