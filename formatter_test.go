@@ -20,12 +20,12 @@ func TestFormatters(t *testing.T) {
 	bFmt := MakeBoundaryFormatter[int]()
 	expect(t, bFmt(1), "1")
 	iFmt := MakeIntervalFormatter(bFmt)
-	expect(t, iFmt(1, 5), "[1, 5)")
+	expect(t, iFmt(Interval[int]{Start: 1, End: 5}), "[1, 5)")
 
 	eFmt := MakeEndpointIntervalFormatter(bFmt)
 
 	str := func(start, end Endpoint[int]) string {
-		return eFmt(start, end)
+		return eFmt(Interval[Endpoint[int]]{Start: start, End: end})
 	}
 	expect(t, str(MakeEndpoints(1, Inclusive, 5, Inclusive)), "[1, 5]")
 	expect(t, str(MakeEndpoints(1, Inclusive, 5, Exclusive)), "[1, 5)")

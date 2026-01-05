@@ -27,13 +27,13 @@ func MakeBoundaryFormatter[B Boundary]() BoundaryFormatter[B] {
 }
 
 // IntervalFormatter is used to print intervals.
-type IntervalFormatter[B Boundary] func(start, end B) string
+type IntervalFormatter[B Boundary] func(i Interval[B]) string
 
 // MakeIntervalFormatter creates an IntervalFormatter[B] which uses the given
 // formatter for B.
 func MakeIntervalFormatter[B Boundary](bFmt BoundaryFormatter[B]) IntervalFormatter[B] {
-	return func(start, end B) string {
-		return fmt.Sprintf("[%s, %s)", bFmt(start), bFmt(end))
+	return func(i Interval[B]) string {
+		return fmt.Sprintf("[%s, %s)", bFmt(i.Start), bFmt(i.End))
 	}
 }
 
@@ -42,14 +42,14 @@ func MakeIntervalFormatter[B Boundary](bFmt BoundaryFormatter[B]) IntervalFormat
 func MakeEndpointIntervalFormatter[B Boundary](
 	bFmt BoundaryFormatter[B],
 ) IntervalFormatter[Endpoint[B]] {
-	return func(start, end Endpoint[B]) string {
+	return func(i Interval[Endpoint[B]]) string {
 		c1, c2 := '[', ')'
-		if start.PlusEpsilon {
+		if i.Start.PlusEpsilon {
 			c1 = '('
 		}
-		if end.PlusEpsilon {
+		if i.End.PlusEpsilon {
 			c2 = ']'
 		}
-		return fmt.Sprintf("%c%s, %s%c", c1, bFmt(start.B), bFmt(end.B), c2)
+		return fmt.Sprintf("%c%s, %s%c", c1, bFmt(i.Start.B), bFmt(i.End.B), c2)
 	}
 }
