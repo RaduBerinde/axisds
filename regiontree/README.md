@@ -66,7 +66,7 @@ equality check:
 import (
 	"cmp"
     "fmt"
-    "github.com/RaduBerinde/axisds/regiontree"
+    "github.com/RaduBerinde/axisds/v2/regiontree"
 )
 
 func main() {

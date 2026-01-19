@@ -1,4 +1,4 @@
-module github.com/RaduBerinde/axisds
+module github.com/RaduBerinde/axisds/v2
 
 go 1.23
 
