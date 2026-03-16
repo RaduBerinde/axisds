@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RaduBerinde/axisds/v2"
+	"github.com/RaduBerinde/axisds/v3"
 	"github.com/RaduBerinde/btreemap"
 	"github.com/cockroachdb/datadriven"
 )

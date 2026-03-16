@@ -19,7 +19,7 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/RaduBerinde/axisds/v2"
+	"github.com/RaduBerinde/axisds/v3"
 	"github.com/RaduBerinde/btreemap"
 )
 
