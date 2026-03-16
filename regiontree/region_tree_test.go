@@ -154,11 +154,19 @@ func TestRegionTreeRand(t *testing.T) {
 
 			case 2:
 				value := rng.IntN(10) - 5
-				withGC := rand.IntN(2) == 0
-				actual := rt.any(a, b, func(prop int) bool { return prop == value }, withGC)
-				expected := n.Any(a, b, func(prop int) bool { return prop == value })
+				withGC := rng.IntN(2) == 0
+				lower, naiveA := randLowerBound(rng, a)
+				upper, naiveB := randUpperBound(rng, b)
+				propFn := func(prop int) bool { return prop == value }
+				actual := rt.any(lower, upper, propFn, withGC)
+				expected := n.Any(naiveA, naiveB, propFn)
+				// When Min() is used, the tree covers (−∞, 0) which always has
+				// zero property; the naive model can't represent this range.
+				if lower.isMin && propFn(0) {
+					expected = true
+				}
 				if actual != expected {
-					t.Fatalf("Any(%d,%d,%d) mismatch: expected %t, got %t\n%s", a, b, value, expected, actual, debugLog.String())
+					t.Fatalf("Any(%v,%v,%d) mismatch: expected %t, got %t\n%s", lower, upper, value, expected, actual, debugLog.String())
 				}
 
 			case 3:
@@ -168,22 +176,42 @@ func TestRegionTreeRand(t *testing.T) {
 
 			default:
 				var b1, b2 strings.Builder
-				withGC := rand.IntN(2) == 0
-				rt.enumerate(a, b, func(i axisds.Interval[int], val int) bool {
+				withGC := rng.IntN(2) == 0
+				lower, naiveA := randLowerBound(rng, a)
+				upper, naiveB := randUpperBound(rng, b)
+				rt.enumerate(lower, upper, func(i axisds.Interval[int], val int) bool {
 					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", i.Start, i.End, val)
 					return true
 				}, withGC)
-				n.Enumerate(a, b, func(start, end, val int) {
+				n.Enumerate(naiveA, naiveB, func(start, end, val int) {
 					fmt.Fprintf(&b2, "  [%d, %d) = %d\n", start, end, val)
 				})
 				if b1.String() != b2.String() {
-					t.Fatalf("Enumerate(%d,%d) mismatch:\n%sexpected:\n%s\n%s", a, b, b1.String(), b2.String(), debugLog.String())
+					t.Fatalf("Enumerate(%v,%v) mismatch:\n%sexpected:\n%s\n%s", lower, upper, b1.String(), b2.String(), debugLog.String())
 				}
 			}
 
 			rt.CheckInvariants()
 		}
 	}
+}
+
+// randLowerBound randomly returns either GE(key) or Min(). When Min() is
+// returned, the naive equivalent bound (0) is returned as the second value.
+func randLowerBound(rng *rand.Rand, key int) (LowerBound[int], int) {
+	if rng.IntN(4) == 0 {
+		return Min[int](), 0
+	}
+	return GE(key), key
+}
+
+// randUpperBound randomly returns either LT(key) or Max(). When Max() is
+// returned, the naive equivalent bound (maxRange) is returned as the second value.
+func randUpperBound(rng *rand.Rand, key int) (UpperBound[int], int) {
+	if rng.IntN(4) == 0 {
+		return Max[int](), maxRange
+	}
+	return LT(key), key
 }
 
 const maxRange = 1000
@@ -279,7 +307,7 @@ func TestWithGC(t *testing.T) {
 	// Increase global so that values 3, 5, and 2 become effectively zero.
 	global = 5
 	// Without GC, results should reflect effective values but boundaries remain.
-	got := collect(rt.Enumerate(0, 50))
+	got := collect(rt.Enumerate(GE(0), LT(50)))
 	exp := [][3]int{{20, 30, 15}}
 	if !reflect.DeepEqual(got, exp) {
 		t.Fatalf("Enumerate without GC: expected %v, got %v", exp, got)
@@ -289,7 +317,7 @@ func TestWithGC(t *testing.T) {
 	}
 
 	// With GC, same results but unnecessary boundaries should be cleaned up.
-	got = collect(rt.Enumerate(0, 50, WithGC))
+	got = collect(rt.Enumerate(GE(0), LT(50), WithGC))
 	if !reflect.DeepEqual(got, exp) {
 		t.Fatalf("Enumerate with GC: expected %v, got %v", exp, got)
 	}
@@ -313,14 +341,14 @@ func TestWithGC(t *testing.T) {
 
 	global = 3
 	// Any without GC.
-	if !rt.Any(0, 30, func(prop int) bool { return max(0, prop-global) > 0 }) {
+	if !rt.Any(GE(0), LT(30), func(prop int) bool { return max(0, prop-global) > 0 }) {
 		t.Fatalf("Any should find region with effective value > 0")
 	}
 	if rt.InternalLen() != initialLen {
 		t.Fatalf("InternalLen should not change without GC")
 	}
 	// Any with GC.
-	if !rt.Any(0, 30, func(prop int) bool { return max(0, prop-global) > 0 }, WithGC) {
+	if !rt.Any(GE(0), LT(30), func(prop int) bool { return max(0, prop-global) > 0 }, WithGC) {
 		t.Fatalf("Any with GC should find region with effective value > 0")
 	}
 	if rt.InternalLen() >= initialLen {
@@ -354,7 +382,7 @@ func TestWithGC(t *testing.T) {
 func TestClone(t *testing.T) {
 	expect := func(rt *T[int, int], vals ...int) {
 		var r [][3]int
-		for i, prop := range rt.Enumerate(0, 1000) {
+		for i, prop := range rt.Enumerate(GE(0), LT(1000)) {
 			r = append(r, [3]int{i.Start, i.End, prop})
 		}
 		var exp [][3]int
