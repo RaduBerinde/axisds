@@ -311,6 +311,73 @@ func (t *T[B, P]) enumerate(
 	}
 }
 
+// EnumerateDesc enumerates all regions with non-zero property in the given
+// range, in descending order of position. The upper bound is listed first and
+// the lower bound second, matching the direction of iteration.
+//
+// The emitted intervals still have Start < End; only the iteration order is
+// reversed.
+//
+// EnumerateDesc can be called concurrently with other read-only methods (as
+// long as WithGC is not used).
+func (t *T[B, P]) EnumerateDesc(
+	upper UpperBound[B], lower LowerBound[B], opts ...Option,
+) iter.Seq2[axisds.Interval[B], P] {
+	gc := hasWithGC(opts)
+	return func(yield func(i axisds.Interval[B], prop P) bool) {
+		t.enumerateDesc(upper, lower, yield, gc)
+	}
+}
+
+func (t *T[B, P]) enumerateDesc(
+	upper UpperBound[B],
+	lower LowerBound[B],
+	emit func(i axisds.Interval[B], prop P) bool,
+	withGC bool,
+) {
+	if t.tree.Len() < 2 {
+		return
+	}
+	// If both bounds have keys, check ordering.
+	if !lower.isMin && !upper.isMax && t.cmp(lower.key, upper.key) >= 0 {
+		return
+	}
+
+	var dh enumerateDescHelper[B, P]
+
+	// For LT(end): set the initial upper boundary for the first region.
+	if !upper.isMax {
+		dh.regionEnd = upper.key
+		dh.regionEndSet = true
+	}
+
+	var toDelete []B
+	for rStart, rProp := range t.tree.Descend(upper.btreemapBound(), lower.btreemapBound()) {
+		if deleteKey, ok := dh.addBoundary(rStart, rProp, t.propEq, emit); ok && withGC {
+			toDelete = append(toDelete, deleteKey)
+		}
+		if dh.stopEmitting {
+			break
+		}
+	}
+
+	// For GE(start): check if there's a region containing start that extends
+	// below the lowest boundary in the descend range.
+	if !lower.isMin && dh.regionEndSet && !dh.stopEmitting {
+		if _, rProp, ok := t.tree.SeekLT(lower.key); ok && t.cmp(dh.regionEnd, lower.key) > 0 {
+			if deleteKey, ok := dh.addLowerBound(lower.key, rProp, t.propEq, emit); ok && withGC {
+				toDelete = append(toDelete, deleteKey)
+			}
+		}
+	}
+
+	dh.emitPending(t.propEq, emit)
+
+	for _, b := range toDelete {
+		t.tree.Delete(b)
+	}
+}
+
 // Any returns true if the given range overlaps any region with property that
 // satisfies the given function.
 //
@@ -419,6 +486,98 @@ func (eh *enumerateHelper[B, P]) finish(
 		interval := axisds.Interval[B]{Start: eh.lastBoundary, End: end}
 		emitFn(interval, eh.lastProp)
 	}
+}
+
+type enumerateDescHelper[B Boundary, P Property] struct {
+	// regionEnd is the end boundary for the next region to be formed.
+	regionEnd    B
+	regionEndSet bool
+
+	// Pending region [pendingStart, pendingEnd) with pendingProp, waiting to
+	// be emitted. Emission is delayed to allow merging adjacent regions with
+	// equal properties (needed for correct GC output).
+	pendingStart B
+	pendingEnd   B
+	pendingProp  P
+	hasPending   bool
+
+	stopEmitting bool
+}
+
+// addBoundary processes a boundary seen during descending iteration. Each
+// boundary marks the start of a region extending up to regionEnd.
+//
+// Returns (deleteKey, true) if a boundary should be deleted for GC.
+func (dh *enumerateDescHelper[B, P]) addBoundary(
+	boundary B, prop P, propEq PropertyEqualFn[P], emitFn func(i axisds.Interval[B], prop P) bool,
+) (deleteKey B, shouldDelete bool) {
+	if !dh.regionEndSet {
+		// First boundary (Max() upper bound): record as region end.
+		dh.regionEnd = boundary
+		dh.regionEndSet = true
+		return
+	}
+
+	// Region [boundary, regionEnd) has property prop.
+	if dh.hasPending && propEq(prop, dh.pendingProp) {
+		// Merge with pending: extend it downward. The boundary at pendingStart
+		// separates two equal-property regions and can be deleted.
+		deleteKey = dh.pendingStart
+		shouldDelete = true
+		dh.pendingStart = boundary
+	} else {
+		// Emit existing pending region, then start a new one.
+		dh.emitPending(propEq, emitFn)
+		if dh.stopEmitting {
+			return
+		}
+		dh.pendingStart = boundary
+		dh.pendingEnd = dh.regionEnd
+		dh.pendingProp = prop
+		dh.hasPending = true
+	}
+	dh.regionEnd = boundary
+	return
+}
+
+// addLowerBound handles the region extending below the lowest boundary in the
+// descend range, clamped at start.
+//
+// Returns (deleteKey, true) if a boundary should be deleted for GC.
+func (dh *enumerateDescHelper[B, P]) addLowerBound(
+	start B, prop P, propEq PropertyEqualFn[P], emitFn func(i axisds.Interval[B], prop P) bool,
+) (deleteKey B, shouldDelete bool) {
+	if dh.hasPending && propEq(prop, dh.pendingProp) {
+		// Merge with pending.
+		deleteKey = dh.pendingStart
+		shouldDelete = true
+		dh.pendingStart = start
+	} else {
+		dh.emitPending(propEq, emitFn)
+		if dh.stopEmitting {
+			return
+		}
+		dh.pendingStart = start
+		dh.pendingEnd = dh.regionEnd
+		dh.pendingProp = prop
+		dh.hasPending = true
+	}
+	return
+}
+
+func (dh *enumerateDescHelper[B, P]) emitPending(
+	propEq PropertyEqualFn[P], emitFn func(i axisds.Interval[B], prop P) bool,
+) {
+	if !dh.hasPending || dh.stopEmitting {
+		return
+	}
+	if !propEq(zero[P](), dh.pendingProp) {
+		interval := axisds.Interval[B]{Start: dh.pendingStart, End: dh.pendingEnd}
+		if !emitFn(interval, dh.pendingProp) {
+			dh.stopEmitting = true
+		}
+	}
+	dh.hasPending = false
 }
 
 // IsEmpty returns true if the tree contains no regions with non-zero property.

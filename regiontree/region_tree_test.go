@@ -166,6 +166,28 @@ func TestRegionTreeRand(t *testing.T) {
 					t.Fatalf("IsEmpty %t instead of %t\n%s", actual, exp, debugLog.String())
 				}
 
+			case 4:
+				// Test EnumerateDesc against naive (reversed).
+				var b1 strings.Builder
+				withGC := rng.IntN(2) == 0
+				lower, naiveA := randLowerBound(rng, a)
+				upper, naiveB := randUpperBound(rng, b)
+				rt.enumerateDesc(upper, lower, func(i axisds.Interval[int], val int) bool {
+					fmt.Fprintf(&b1, "  [%d, %d) = %d\n", i.Start, i.End, val)
+					return true
+				}, withGC)
+				var naiveResults []string
+				n.Enumerate(naiveA, naiveB, func(start, end, val int) {
+					naiveResults = append(naiveResults, fmt.Sprintf("  [%d, %d) = %d\n", start, end, val))
+				})
+				var b2 strings.Builder
+				for i := len(naiveResults) - 1; i >= 0; i-- {
+					b2.WriteString(naiveResults[i])
+				}
+				if b1.String() != b2.String() {
+					t.Fatalf("EnumerateDesc(%v,%v) mismatch:\n%sexpected:\n%s\n%s", upper, lower, b1.String(), b2.String(), debugLog.String())
+				}
+
 			default:
 				var b1, b2 strings.Builder
 				withGC := rng.IntN(2) == 0
@@ -368,6 +390,40 @@ func TestWithGC(t *testing.T) {
 	}
 	if rt.InternalLen() >= initialLen {
 		t.Fatalf("InternalLen should decrease after All with GC: was %d, now %d", initialLen, rt.InternalLen())
+	}
+
+	// Test EnumerateDesc with GC.
+	global = 0
+	rt = Make[int, int](cmp.Compare[int], func(a, b int) bool {
+		ea, eb := max(0, a-global), max(0, b-global)
+		return ea == eb
+	})
+	// [0,10)=3  [10,20)=5  [20,30)=15  [30,40)=2
+	// After global=5: effective 0, 0, 10, 0.
+	// Boundaries at 10 and 40 can be GC'd.
+	rt.Update(0, 10, func(int) int { return 3 })
+	rt.Update(10, 20, func(int) int { return 5 })
+	rt.Update(20, 30, func(int) int { return 15 })
+	rt.Update(30, 40, func(int) int { return 2 })
+	initialLen = rt.InternalLen()
+
+	global = 5
+	// Without GC.
+	got = collect(rt.EnumerateDesc(LT(50), GE(0)))
+	exp = [][3]int{{20, 30, 15}}
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("EnumerateDesc without GC: expected %v, got %v", exp, got)
+	}
+	if rt.InternalLen() != initialLen {
+		t.Fatalf("InternalLen should not have changed without GC: expected %d, got %d", initialLen, rt.InternalLen())
+	}
+	// With GC.
+	got = collect(rt.EnumerateDesc(LT(50), GE(0), WithGC))
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("EnumerateDesc with GC: expected %v, got %v", exp, got)
+	}
+	if rt.InternalLen() >= initialLen {
+		t.Fatalf("InternalLen should have decreased after EnumerateDesc with GC: was %d, now %d", initialLen, rt.InternalLen())
 	}
 }
 
