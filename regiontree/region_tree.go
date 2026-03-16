@@ -42,6 +42,28 @@ type Property any
 // A zero property value is any value that is equal to the zero P value.
 type PropertyEqualFn[P Property] func(a, b P) bool
 
+// Option configures the behavior of region tree query methods.
+type Option struct {
+	withGC bool
+}
+
+// WithGC is an option that enables garbage collection of unnecessary
+// boundaries between regions with properties that have become equal.
+//
+// This option is only useful to improve performance when the PropertyEqualFn
+// can change over time. Methods called with this option cannot be called
+// concurrently with any other methods.
+var WithGC = Option{withGC: true}
+
+func hasWithGC(opts []Option) bool {
+	for _, o := range opts {
+		if o.withGC {
+			return true
+		}
+	}
+	return false
+}
+
 // T is a tree of regions which fragment a one-dimensional space. Regions have
 // boundaries of type B and each region maintains a property P. Neighboring
 // regions with equal properties are automatically merged.
@@ -193,23 +215,12 @@ func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
 //
-// Enumerate can be called concurrently with other read-only methods.
-func (t *T[B, P]) Enumerate(start, end B) iter.Seq2[axisds.Interval[B], P] {
+// Enumerate can be called concurrently with other read-only methods (as long as
+// WithGC is not used).
+func (t *T[B, P]) Enumerate(start, end B, opts ...Option) iter.Seq2[axisds.Interval[B], P] {
+	gc := hasWithGC(opts)
 	return func(yield func(i axisds.Interval[B], prop P) bool) {
-		t.enumerate(start, end, yield, false /* no GC */)
-	}
-}
-
-// EnumerateWithGC is a variant of Enumerate which internally deletes
-// unnecessary boundaries between regions with properties that have become
-// equal.
-//
-// This variant is only useful to improve performance when the PropertyEqualFn
-// can change over time. It cannot be called concurrently with any other
-// methods.
-func (t *T[B, P]) EnumerateWithGC(start, end B) iter.Seq2[axisds.Interval[B], P] {
-	return func(yield func(i axisds.Interval[B], prop P) bool) {
-		t.enumerate(start, end, yield, true /* with GC */)
+		t.enumerate(start, end, yield, gc)
 	}
 }
 
@@ -245,19 +256,10 @@ func (t *T[B, P]) enumerate(
 // Any returns true if [start, end) overlaps any region with property that
 // satisfies the given function.
 //
-// Any can be called concurrently with other read-only methods.
-func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool) bool {
-	return t.any(start, end, propFn, false /* withGC */)
-}
-
-// AnyWithGC is a variant of Any which internally deletes unnecessary boundaries
-// between regions with properties that have become equal.
-//
-// This variant is only useful to improve performance when the PropertyEqualFn
-// can change over time. It cannot be called concurrently with any other
-// methods.
-func (t *T[B, P]) AnyWithGC(start, end B, propFn func(prop P) bool) bool {
-	return t.any(start, end, propFn, true /* withGC */)
+// Any can be called concurrently with other read-only methods (as long as
+// WithGC is not used).
+func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool, opts ...Option) bool {
+	return t.any(start, end, propFn, hasWithGC(opts))
 }
 
 // Any returns true if [start, end) overlaps any region with property that
@@ -293,22 +295,12 @@ func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool 
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
 //
-// All can be called concurrently with other read-only methods.
-func (t *T[B, P]) All() iter.Seq2[axisds.Interval[B], P] {
+// All can be called concurrently with other read-only methods (as long as
+// WithGC is not used).
+func (t *T[B, P]) All(opts ...Option) iter.Seq2[axisds.Interval[B], P] {
+	gc := hasWithGC(opts)
 	return func(yield func(i axisds.Interval[B], prop P) bool) {
-		t.all(yield, false /* no GC */)
-	}
-}
-
-// AllWithGC is a variant of All which internally deletes unnecessary boundaries
-// between regions with properties that have become equal.
-//
-// This variant is only useful to improve performance when the PropertyEqualFn
-// can change over time. It cannot be called concurrently with any other
-// methods.
-func (t *T[B, P]) AllWithGC() iter.Seq2[axisds.Interval[B], P] {
-	return func(yield func(i axisds.Interval[B], prop P) bool) {
-		t.all(yield, true /* with GC */)
+		t.all(yield, gc)
 	}
 }
 

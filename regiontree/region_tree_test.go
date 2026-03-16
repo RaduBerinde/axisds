@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"iter"
 	"math/rand/v2"
 	"reflect"
 	"strings"
@@ -239,6 +240,115 @@ func (n *naiveInts) IsEmpty() bool {
 		}
 	}
 	return true
+}
+
+func TestWithGC(t *testing.T) {
+	// global is a threshold; properties with value <= global are effectively
+	// zero (they all compare equal to 0).
+	global := 0
+	rt := Make[int, int](cmp.Compare[int], func(a, b int) bool {
+		ea, eb := max(0, a-global), max(0, b-global)
+		return ea == eb
+	})
+
+	// Set up regions with adjacent values that will become equal after
+	// increasing global: [0,10)=3  [10,20)=5  [20,30)=15  [30,40)=2
+	// After global=5: effective values are 0, 0, 10, 0.
+	// Adjacent pairs (3,5)→(0,0) and (2,0)→(0,0) become equal, so boundaries
+	// at 10 and 40 can be GC'd.
+	rt.Update(0, 10, func(int) int { return 3 })
+	rt.Update(10, 20, func(int) int { return 5 })
+	rt.Update(20, 30, func(int) int { return 15 })
+	rt.Update(30, 40, func(int) int { return 2 })
+
+	// Collect results from an iterator.
+	collect := func(it iter.Seq2[axisds.Interval[int], int]) [][3]int {
+		var result [][3]int
+		for i, prop := range it {
+			result = append(result, [3]int{i.Start, i.End, prop})
+		}
+		return result
+	}
+
+	// Initially all four regions are present (4 starts + 1 trailing zero).
+	initialLen := rt.InternalLen()
+	if initialLen != 5 {
+		t.Fatalf("expected InternalLen 5, got %d", initialLen)
+	}
+
+	// Increase global so that values 3, 5, and 2 become effectively zero.
+	global = 5
+	// Without GC, results should reflect effective values but boundaries remain.
+	got := collect(rt.Enumerate(0, 50))
+	exp := [][3]int{{20, 30, 15}}
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("Enumerate without GC: expected %v, got %v", exp, got)
+	}
+	if rt.InternalLen() != initialLen {
+		t.Fatalf("InternalLen should not have changed without GC: expected %d, got %d", initialLen, rt.InternalLen())
+	}
+
+	// With GC, same results but unnecessary boundaries should be cleaned up.
+	got = collect(rt.Enumerate(0, 50, WithGC))
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("Enumerate with GC: expected %v, got %v", exp, got)
+	}
+	gcLen := rt.InternalLen()
+	if gcLen >= initialLen {
+		t.Fatalf("InternalLen should have decreased after GC: was %d, now %d", initialLen, gcLen)
+	}
+
+	// Test Any with GC.
+	global = 0
+	rt = Make[int, int](cmp.Compare[int], func(a, b int) bool {
+		ea, eb := max(0, a-global), max(0, b-global)
+		return ea == eb
+	})
+	// [0,10)=2  [10,20)=1  [20,30)=7
+	// After global=3: effective 0, 0, 4. Boundary at 10 becomes GC-able.
+	rt.Update(0, 10, func(int) int { return 2 })
+	rt.Update(10, 20, func(int) int { return 1 })
+	rt.Update(20, 30, func(int) int { return 7 })
+	initialLen = rt.InternalLen()
+
+	global = 3
+	// Any without GC.
+	if !rt.Any(0, 30, func(prop int) bool { return max(0, prop-global) > 0 }) {
+		t.Fatalf("Any should find region with effective value > 0")
+	}
+	if rt.InternalLen() != initialLen {
+		t.Fatalf("InternalLen should not change without GC")
+	}
+	// Any with GC.
+	if !rt.Any(0, 30, func(prop int) bool { return max(0, prop-global) > 0 }, WithGC) {
+		t.Fatalf("Any with GC should find region with effective value > 0")
+	}
+	if rt.InternalLen() >= initialLen {
+		t.Fatalf("InternalLen should decrease after Any with GC: was %d, now %d", initialLen, rt.InternalLen())
+	}
+
+	// Test All with GC.
+	global = 0
+	rt = Make[int, int](cmp.Compare[int], func(a, b int) bool {
+		ea, eb := max(0, a-global), max(0, b-global)
+		return ea == eb
+	})
+	// [0,10)=4  [10,20)=3  [20,30)=9
+	// After global=4: effective 0, 0, 5. Boundary at 10 becomes GC-able.
+	rt.Update(0, 10, func(int) int { return 4 })
+	rt.Update(10, 20, func(int) int { return 3 })
+	rt.Update(20, 30, func(int) int { return 9 })
+	initialLen = rt.InternalLen()
+
+	global = 4
+	got = collect(rt.All(WithGC))
+	exp = [][3]int{{20, 30, 9}}
+	if !reflect.DeepEqual(got, exp) {
+		t.Fatalf("All with GC: expected %v, got %v", exp, got)
+	}
+	if rt.InternalLen() >= initialLen {
+		t.Fatalf("InternalLen should decrease after All with GC: was %d, now %d", initialLen, rt.InternalLen())
+	}
 }
 
 func TestClone(t *testing.T) {
