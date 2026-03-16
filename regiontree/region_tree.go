@@ -25,6 +25,44 @@ import (
 
 type Boundary = axisds.Boundary
 
+// LowerBound defines an (optional) lower bound for region tree query methods.
+type LowerBound[B Boundary] struct {
+	isMin bool
+	key   B
+}
+
+// Min returns a LowerBound that does not constrain the lower end of the query.
+func Min[B Boundary]() LowerBound[B] { return LowerBound[B]{isMin: true} }
+
+// GE returns a lower bound that includes all regions at or after key.
+func GE[B Boundary](key B) LowerBound[B] { return LowerBound[B]{key: key} }
+
+func (lb LowerBound[B]) btreemapBound() btreemap.LowerBound[B] {
+	if lb.isMin {
+		return btreemap.Min[B]()
+	}
+	return btreemap.GE(lb.key)
+}
+
+// UpperBound defines an (optional) upper bound for region tree query methods.
+type UpperBound[B Boundary] struct {
+	isMax bool
+	key   B
+}
+
+// Max returns an UpperBound that does not constrain the upper end of the query.
+func Max[B Boundary]() UpperBound[B] { return UpperBound[B]{isMax: true} }
+
+// LT returns an upper bound that excludes regions at or after key.
+func LT[B Boundary](key B) UpperBound[B] { return UpperBound[B]{key: key} }
+
+func (ub UpperBound[B]) btreemapBound() btreemap.UpperBound[B] {
+	if ub.isMax {
+		return btreemap.Max[B]()
+	}
+	return btreemap.LT(ub.key)
+}
+
 // Property is an arbitrary type that represents a property of a region of a
 // one-dimensional axis.
 type Property any
@@ -210,35 +248,49 @@ func (t *T[B, P]) endBoundaryInfo(end B) (exists bool, afterProp P) {
 	return false, afterProp
 }
 
-// Enumerate all regions in the range [start, end) with non-zero property.
+// Enumerate all regions in the given range with non-zero property.
 //
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
 //
 // Enumerate can be called concurrently with other read-only methods (as long as
 // WithGC is not used).
-func (t *T[B, P]) Enumerate(start, end B, opts ...Option) iter.Seq2[axisds.Interval[B], P] {
+func (t *T[B, P]) Enumerate(
+	lower LowerBound[B], upper UpperBound[B], opts ...Option,
+) iter.Seq2[axisds.Interval[B], P] {
 	gc := hasWithGC(opts)
 	return func(yield func(i axisds.Interval[B], prop P) bool) {
-		t.enumerate(start, end, yield, gc)
+		t.enumerate(lower, upper, yield, gc)
 	}
 }
 
 func (t *T[B, P]) enumerate(
-	start, end B, emit func(i axisds.Interval[B], prop P) bool, withGC bool,
+	lower LowerBound[B],
+	upper UpperBound[B],
+	emit func(i axisds.Interval[B], prop P) bool,
+	withGC bool,
 ) {
-	if t.tree.Len() < 2 || t.cmp(start, end) >= 0 {
+	if t.tree.Len() < 2 {
 		return
 	}
-	var eh enumerateHelper[B, P]
-	// Handle the case where we don't have a boundary equal to start; we have to
-	// find the region that contains it.
-	if rStart, rProp, ok := t.tree.SeekLE(start); ok && t.cmp(rStart, start) < 0 {
-		// This is the first addRegion call, so we won't emit anything.
-		eh.addRegion(start, rProp, t.propEq, nil)
+	// If both bounds have keys, check ordering.
+	if !lower.isMin && !upper.isMax && t.cmp(lower.key, upper.key) >= 0 {
+		return
 	}
+
+	var eh enumerateHelper[B, P]
+
+	// For GE(start): find region containing start via SeekLE.
+	// For Min(): skip this step.
+	if !lower.isMin {
+		if rStart, rProp, ok := t.tree.SeekLE(lower.key); ok && t.cmp(rStart, lower.key) < 0 {
+			// This is the first addRegion call, so we won't emit anything.
+			eh.addRegion(lower.key, rProp, t.propEq, nil)
+		}
+	}
+
 	var toDelete []B
-	for rStart, rProp := range t.tree.Ascend(btreemap.GE(start), btreemap.LT(end)) {
+	for rStart, rProp := range t.tree.Ascend(lower.btreemapBound(), upper.btreemapBound()) {
 		eh.addRegion(rStart, rProp, t.propEq, emit)
 		if withGC && eh.canDeleteLastBoundary {
 			toDelete = append(toDelete, rStart)
@@ -247,34 +299,54 @@ func (t *T[B, P]) enumerate(
 			break
 		}
 	}
-	eh.finish(end, t.propEq, emit)
+
+	// For LT(end): clamp last region via finish.
+	// For Max(): skip (last tree region has zero prop, naturally terminates).
+	if !upper.isMax {
+		eh.finish(upper.key, t.propEq, emit)
+	}
+
 	for _, b := range toDelete {
 		t.tree.Delete(b)
 	}
 }
 
-// Any returns true if [start, end) overlaps any region with property that
+// Any returns true if the given range overlaps any region with property that
 // satisfies the given function.
 //
 // Any can be called concurrently with other read-only methods (as long as
 // WithGC is not used).
-func (t *T[B, P]) Any(start, end B, propFn func(prop P) bool, opts ...Option) bool {
-	return t.any(start, end, propFn, hasWithGC(opts))
+func (t *T[B, P]) Any(
+	lower LowerBound[B], upper UpperBound[B], propFn func(prop P) bool, opts ...Option,
+) bool {
+	return t.any(lower, upper, propFn, hasWithGC(opts))
 }
 
-// Any returns true if [start, end) overlaps any region with property that
-// satisfies the given function.
-func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool {
-	if t.cmp(start, end) >= 0 {
+func (t *T[B, P]) any(
+	lower LowerBound[B], upper UpperBound[B], propFn func(prop P) bool, withGC bool,
+) bool {
+	// If both bounds have keys, check ordering.
+	if !lower.isMin && !upper.isMax && t.cmp(lower.key, upper.key) >= 0 {
 		return false
 	}
-	startBoundaryExists, lastProp := t.startBoundaryInfo(start)
-	if !startBoundaryExists && propFn(lastProp) {
+
+	// For GE(start): check the region containing start (it may not have a
+	// boundary). For Min(): the implicit region before the first boundary has
+	// zero property; check propFn against it.
+	var lastProp P
+	if !lower.isMin {
+		startBoundaryExists, beforeProp := t.startBoundaryInfo(lower.key)
+		if !startBoundaryExists && propFn(beforeProp) {
+			return true
+		}
+		lastProp = beforeProp
+	} else if propFn(lastProp) {
 		return true
 	}
+
 	found := false
 	var toDelete []B
-	for rStart, rProp := range t.tree.Ascend(btreemap.GE(start), btreemap.LT(end)) {
+	for rStart, rProp := range t.tree.Ascend(lower.btreemapBound(), upper.btreemapBound()) {
 		if withGC && t.propEq(rProp, lastProp) {
 			toDelete = append(toDelete, rStart)
 		}
@@ -290,7 +362,8 @@ func (t *T[B, P]) any(start, end B, propFn func(prop P) bool, withGC bool) bool 
 	return found
 }
 
-// All emits all regions with non-zero property.
+// All emits all regions with non-zero property. It is a shorthand for
+// Enumerate(Min[B](), Max[B]()).
 //
 // Two consecutive regions can "touch" but not overlap; if they touch, their
 // properties are not equal.
@@ -305,20 +378,7 @@ func (t *T[B, P]) All(opts ...Option) iter.Seq2[axisds.Interval[B], P] {
 }
 
 func (t *T[B, P]) all(emit func(i axisds.Interval[B], prop P) bool, withGC bool) {
-	var eh enumerateHelper[B, P]
-	var toDelete []B
-	for rStart, rProp := range t.tree.Ascend(btreemap.Min[B](), btreemap.Max[B]()) {
-		eh.addRegion(rStart, rProp, t.propEq, emit)
-		if withGC && eh.canDeleteLastBoundary {
-			toDelete = append(toDelete, rStart)
-		}
-		if eh.stopEmitting {
-			break
-		}
-	}
-	for _, b := range toDelete {
-		t.tree.Delete(b)
-	}
+	t.enumerate(Min[B](), Max[B](), emit, withGC)
 }
 
 type enumerateHelper[B Boundary, P Property] struct {
